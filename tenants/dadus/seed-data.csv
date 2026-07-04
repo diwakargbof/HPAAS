@@ -1,0 +1,187 @@
+Customer Name,Customer Mobile,Customer Email,Bill Date,Items,Bill Amount,Store Code
+Sarita Gupta,9811111709,sarita.gupta85@gmail.com,02/07/2026 12:00,Fruit Cake|bakery|2|150; Rasgulla|sweets|1|160; Rasmalai|sweets|2|260,980,DDU-GK
+Nitin Kapoor,918826011525,,01/07/2026 12:00,Aloo Bhujia|namkeen|11|90,990,DDU-CP
+Vandana Mittal,9810011745,vandana.mittal48@gmail.com,01/07/2026 12:00,Atta Biscuits|bakery|2|60; Fruit Cake|bakery|1|150,270,DDU-CP
+Varun Goel,+91-9911010042,varun.goel62@gmail.com,01/07/2026 12:00,Kachori|namkeen|6|25,150,DDU-NOIDA
+Pooja Bansal,919811110525,pooja.bansal14@gmail.com,30/06/2026 12:00,Dhokla|namkeen|10|110,1100,DDU-NOIDA
+Sarita Malhotra,09953011452,,30/06/2026 12:00,Gulab Jamun|sweets|1|180; Rasgulla|sweets|1|160,340,DDU-CP
+Karan Sharma,919810011666,karan.sharma82@gmail.com,30/06/2026 12:00,Fruit Cake|bakery|1|150; Samosa|namkeen|10|20; Fruit Cake|bakery|2|150,650,DDU-NOIDA
+Yogesh Singh,9953010444,,29/06/2026 12:00,Kachori|namkeen|8|25; Rasgulla|sweets|2|160; Fruit Cake|bakery|2|150,820,DDU-NOIDA
+Sarita Gupta,98111 11709,sarita.gupta85@gmail.com,29/06/2026 12:00,Atta Biscuits|bakery|1|60; Atta Biscuits|bakery|1|60,120,DDU-GK
+Walk-in Customer,12345,,29/06/2026 12:00,Jalebi|sweets|1|120,120,DDU-CP
+Jyoti Verma,+91-9654010483,jyoti.verma17@gmail.com,28/06/2026 12:00,Kaju Katli|sweets|2|275; Fruit Cake|bakery|1|150; Rasgulla|sweets|2|160,1020,DDU-GK
+Meena Saxena,98111 11560,,28/06/2026 12:00,Samosa|namkeen|5|20; Samosa|namkeen|7|20; Mathri|namkeen|5|80,640,DDU-NOIDA
+Meena Saxena,09811111560,,28/06/2026 12:00,Atta Biscuits|bakery|2|60,120,DDU-NOIDA
+Yogesh Mittal,919953010263,,27/06/2026 12:00,Kachori|namkeen|7|25; Mathri|namkeen|11|80,1055,DDU-CP
+Yogesh Verma,78380 10334,,27/06/2026 12:00,Atta Biscuits|bakery|2|60,120,DDU-GK
+Sarita Malhotra,+91-9811111410,,27/06/2026 12:00,Soan Papdi|sweets|2|150; Fruit Cake|bakery|1|150; Gulab Jamun|sweets|1|180,630,DDU-GK
+Ritu Mittal,09811110075,,26/06/2026 12:00,Aloo Bhujia|namkeen|9|90; Milk Cake|sweets|1|240,1050,DDU-NOIDA
+Varun Sharma,88260 10190,varun.sharma64@gmail.com,26/06/2026 12:00,Atta Biscuits|bakery|2|60,120,DDU-CP
+Sarita Malhotra,+91-9811111410,,26/06/2026 12:00,Fruit Cake|bakery|1|150,150,DDU-GK
+Vandana Mittal,98100 11745,vandana.mittal48@gmail.com,25/06/2026 12:00,Fruit Cake|bakery|1|150; Mathri|namkeen|9|80; Atta Biscuits|bakery|2|60,990,DDU-CP
+Shobha Kapoor,9911010156,,24/06/2026 12:00,Kaju Katli|sweets|2|275,550,DDU-NOIDA
+Nitin Kapoor,918826011525,,24/06/2026 12:00,Jalebi|sweets|1|120; Fruit Cake|bakery|2|150,420,DDU-CP
+Rekha Malhotra,+91-8826010373,,21/06/2026 12:00,Mathri|namkeen|5|80; Mathri|namkeen|7|80; Jalebi|sweets|2|120,1200,DDU-CP
+Yogesh Singh,919953010444,,21/06/2026 12:00,Rasgulla|sweets|2|160; Kachori|namkeen|6|25; Rasgulla|sweets|2|160,790,DDU-NOIDA
+Vandana Mittal,9810011745,vandana.mittal48@gmail.com,21/06/2026 12:00,Samosa|namkeen|7|20,140,DDU-CP
+Rajesh Jain,8826010304,rajesh.jain72@gmail.com,20/06/2026 12:00,Aloo Bhujia|namkeen|7|90,630,DDU-NOIDA
+Jyoti Verma,919654010483,jyoti.verma17@gmail.com,20/06/2026 12:00,Mathri|namkeen|10|80,800,DDU-GK
+Madhu Verma,09953011596,,20/06/2026 12:00,Soan Papdi|sweets|1|150; Rasmalai|sweets|1|260,410,DDU-CP
+Rajesh Arora,919953010564,rajesh.arora60@gmail.com,16/06/2026 12:00,Aloo Bhujia|namkeen|6|90; Kachori|namkeen|6|25; Atta Biscuits|bakery|1|60,750,DDU-GK
+Madhu Verma,9953011596,,16/06/2026 12:00,Atta Biscuits|bakery|2|60; Fruit Cake|bakery|2|150; Aloo Bhujia|namkeen|8|90,1140,DDU-CP
+Shobha Kapoor,99110 10156,,15/06/2026 12:00,Milk Cake|sweets|2|240; Motichoor Ladoo|sweets|2|200,880,DDU-NOIDA
+Alok Goel,09911010224,alok.goel8@gmail.com,14/06/2026 12:00,Kachori|namkeen|7|25,175,DDU-GK
+Pooja Bansal,98111 10525,pooja.bansal14@gmail.com,14/06/2026 12:00,Atta Biscuits|bakery|1|60; Kachori|namkeen|12|25; Soan Papdi|sweets|2|150,660,DDU-NOIDA
+Seema Mittal,97170 11632,,14/06/2026 12:00,Mathri|namkeen|11|80; Motichoor Ladoo|sweets|2|200,1280,DDU-NOIDA
+Sarita Gupta,98111 11709,sarita.gupta85@gmail.com,14/06/2026 12:00,Milk Cake|sweets|2|240,480,DDU-GK
+Ritu Mittal,9811110075,,13/06/2026 12:00,Fruit Cake|bakery|1|150; Dhokla|namkeen|8|110,1030,DDU-NOIDA
+Varun Sharma,88260 10190,varun.sharma64@gmail.com,13/06/2026 12:00,Rasgulla|sweets|2|160; Kachori|namkeen|8|25,520,DDU-CP
+,919953010411,,13/06/2026 12:00,Fruit Cake|bakery|2|150; Aloo Bhujia|namkeen|7|90,930,DDU-CP
+Seema Mittal,97170 11632,,13/06/2026 12:00,Fruit Cake|bakery|2|150; Kachori|namkeen|9|25; Fruit Cake|bakery|1|150,675,DDU-NOIDA
+Varun Goel,919911010042,varun.goel62@gmail.com,11/06/2026 12:00,Atta Biscuits|bakery|1|60,60,DDU-NOIDA
+Yogesh Mittal,99530 10263,,11/06/2026 12:00,Aloo Bhujia|namkeen|10|90; Aloo Bhujia|namkeen|12|90,1980,DDU-CP
+Yogesh Verma,+91-7838010334,,11/06/2026 12:00,Atta Biscuits|bakery|1|60; Kaju Katli|sweets|2|275; Mathri|namkeen|9|80,1330,DDU-GK
+Seema Mittal,97170 11632,,11/06/2026 12:00,Atta Biscuits|bakery|2|60,120,DDU-NOIDA
+Rajesh Kapoor,9810010116,rajesh.kapoor27@gmail.com,09/06/2026 12:00,Rasmalai|sweets|1|260; Fruit Cake|bakery|1|150; Motichoor Ladoo|sweets|2|200,810,DDU-CP
+Yogesh Singh,+91-9953010444,,09/06/2026 12:00,Atta Biscuits|bakery|2|60; Aloo Bhujia|namkeen|7|90,750,DDU-NOIDA
+Jyoti Verma,919654010483,jyoti.verma17@gmail.com,09/06/2026 12:00,Fruit Cake|bakery|2|150; Samosa|namkeen|4|20; Mathri|namkeen|6|80,860,DDU-GK
+Pankaj Chopra,97170 11488,pankaj.chopra88@gmail.com,09/06/2026 12:00,Atta Biscuits|bakery|1|60; Aloo Bhujia|namkeen|12|90,1140,DDU-GK
+Nitin Kapoor,918826011525,,08/06/2026 12:00,Besan Ladoo|sweets|1|190,190,DDU-CP
+Madhu Verma,9953011596,,08/06/2026 12:00,Fruit Cake|bakery|2|150; Atta Biscuits|bakery|1|60,360,DDU-CP
+Dinesh Mittal,919654011037,dinesh.mittal14@gmail.com,07/06/2026 12:00,Fruit Cake|bakery|1|150; Atta Biscuits|bakery|1|60; Gulab Jamun|sweets|2|180,570,DDU-CP
+Rajesh Jain,08826010304,rajesh.jain72@gmail.com,06/06/2026 12:00,Gulab Jamun|sweets|1|180; Fruit Cake|bakery|2|150; Fruit Cake|bakery|1|150,630,DDU-NOIDA
+Neha Saxena,09654011265,,06/06/2026 12:00,Kaju Katli|sweets|2|275; Besan Ladoo|sweets|1|190,740,DDU-NOIDA
+Shobha Kapoor,+91-9911010156,,05/06/2026 12:00,Samosa|namkeen|9|20; Dhokla|namkeen|9|110; Aloo Bhujia|namkeen|7|90,1800,DDU-NOIDA
+Rajesh Arora,9953010564,rajesh.arora60@gmail.com,02/06/2026 12:00,Fruit Cake|bakery|2|150,300,DDU-GK
+Alok Goel,09911010224,alok.goel8@gmail.com,01/06/2026 12:00,Gulab Jamun|sweets|1|180; Fruit Cake|bakery|2|150; Samosa|namkeen|9|20,660,DDU-GK
+Yogesh Verma,78380 10334,,01/06/2026 12:00,Fruit Cake|bakery|1|150; Atta Biscuits|bakery|1|60; Jalebi|sweets|1|120,330,DDU-GK
+Varun Sharma,+91-8826010190,varun.sharma64@gmail.com,31/05/2026 12:00,Dhokla|namkeen|9|110,990,DDU-CP
+,09953010411,,31/05/2026 12:00,Samosa|namkeen|5|20,100,DDU-CP
+Ritu Mittal,919811110075,,29/05/2026 12:00,Aloo Bhujia|namkeen|10|90; Milk Cake|sweets|2|240,1380,DDU-NOIDA
+Rekha Malhotra,918826010373,,29/05/2026 12:00,Besan Ladoo|sweets|2|190; Besan Ladoo|sweets|2|190; Mathri|namkeen|7|80,1320,DDU-CP
+Yogesh Singh,99530 10444,,29/05/2026 12:00,Kachori|namkeen|10|25; Fruit Cake|bakery|1|150,400,DDU-NOIDA
+Pooja Bansal,09811110525,pooja.bansal14@gmail.com,28/05/2026 12:00,Atta Biscuits|bakery|1|60; Dhokla|namkeen|7|110; Atta Biscuits|bakery|1|60,890,DDU-NOIDA
+Varun Goel,919911010042,varun.goel62@gmail.com,27/05/2026 12:00,Mathri|namkeen|8|80; Atta Biscuits|bakery|2|60,760,DDU-NOIDA
+Rajesh Kapoor,919810010116,rajesh.kapoor27@gmail.com,26/05/2026 12:00,Kachori|namkeen|9|25,225,DDU-CP
+Shobha Kapoor,919911010156,,26/05/2026 12:00,Fruit Cake|bakery|1|150,150,DDU-NOIDA
+Rajesh Jain,08826010304,rajesh.jain72@gmail.com,26/05/2026 12:00,Kaju Katli|sweets|2|275; Fruit Cake|bakery|1|150; Kaju Katli|sweets|2|275,1250,DDU-NOIDA
+Jyoti Verma,09654010483,jyoti.verma17@gmail.com,26/05/2026 12:00,Atta Biscuits|bakery|2|60; Rasgulla|sweets|2|160; Dhokla|namkeen|10|110,1540,DDU-GK
+Varun Goel,09911010042,varun.goel62@gmail.com,25/05/2026 12:00,Dhokla|namkeen|9|110; Atta Biscuits|bakery|1|60,1050,DDU-NOIDA
+Yogesh Mittal,99530 10263,,24/05/2026 12:00,Kaju Katli|sweets|1|275,275,DDU-CP
+Rohit Kapoor,88260 11152,,22/05/2026 12:00,Fruit Cake|bakery|2|150,300,DDU-GK
+Rajesh Arora,99530 10564,rajesh.arora60@gmail.com,21/05/2026 12:00,Atta Biscuits|bakery|1|60; Besan Ladoo|sweets|1|190,250,DDU-GK
+Seema Gupta,+91-9810011224,seema.gupta70@gmail.com,21/05/2026 12:00,Kachori|namkeen|11|25; Samosa|namkeen|11|20; Atta Biscuits|bakery|2|60,615,DDU-GK
+Karan Verma,98100 11295,karan.verma67@gmail.com,21/05/2026 12:00,Mathri|namkeen|12|80; Dhokla|namkeen|4|110; Atta Biscuits|bakery|2|60,1520,DDU-NOIDA
+Yogesh Singh,99530 10444,,20/05/2026 12:00,Besan Ladoo|sweets|2|190; Kaju Katli|sweets|1|275; Rasmalai|sweets|1|260,915,DDU-NOIDA
+Yogesh Verma,7838010334,,18/05/2026 12:00,Aloo Bhujia|namkeen|7|90; Aloo Bhujia|namkeen|10|90,1530,DDU-GK
+,+91-9953010411,,18/05/2026 12:00,Motichoor Ladoo|sweets|2|200,400,DDU-CP
+Alok Goel,+91-9911010224,alok.goel8@gmail.com,17/05/2026 12:00,Kachori|namkeen|5|25; Fruit Cake|bakery|1|150; Rasmalai|sweets|1|260,535,DDU-GK
+Varun Sharma,08826010190,varun.sharma64@gmail.com,15/05/2026 12:00,Atta Biscuits|bakery|2|60; Aloo Bhujia|namkeen|9|90,930,DDU-CP
+Pooja Bansal,9811110525,pooja.bansal14@gmail.com,15/05/2026 12:00,Dhokla|namkeen|5|110,550,DDU-NOIDA
+Rajesh Jain,8826010304,rajesh.jain72@gmail.com,14/05/2026 12:00,Mathri|namkeen|11|80,880,DDU-NOIDA
+Jyoti Verma,09654010483,jyoti.verma17@gmail.com,13/05/2026 12:00,Fruit Cake|bakery|2|150; Atta Biscuits|bakery|2|60; Motichoor Ladoo|sweets|1|200,620,DDU-GK
+Ritu Mittal,+91-9811110075,,12/05/2026 12:00,Jalebi|sweets|1|120; Aloo Bhujia|namkeen|10|90,1020,DDU-NOIDA
+Rekha Malhotra,8826010373,,12/05/2026 12:00,Atta Biscuits|bakery|1|60; Motichoor Ladoo|sweets|1|200; Kaju Katli|sweets|2|275,810,DDU-CP
+Harish Saxena,+91-9717011335,harish.saxena83@gmail.com,12/05/2026 12:00,Rasmalai|sweets|2|260; Kachori|namkeen|9|25,745,DDU-GK
+Varun Goel,+91-9911010042,varun.goel62@gmail.com,11/05/2026 12:00,Mathri|namkeen|8|80,640,DDU-NOIDA
+Shobha Kapoor,99110 10156,,11/05/2026 12:00,Kachori|namkeen|9|25; Fruit Cake|bakery|2|150,525,DDU-NOIDA
+Rajesh Kapoor,919810010116,rajesh.kapoor27@gmail.com,10/05/2026 12:00,Atta Biscuits|bakery|2|60; Atta Biscuits|bakery|2|60; Atta Biscuits|bakery|1|60,300,DDU-CP
+Rajesh Arora,99530 10564,rajesh.arora60@gmail.com,07/05/2026 12:00,Besan Ladoo|sweets|2|190; Kaju Katli|sweets|1|275,655,DDU-GK
+Anita Sharma,09953011184,,05/05/2026 12:00,Jalebi|sweets|1|120; Gulab Jamun|sweets|1|180,300,DDU-GK
+Alok Goel,9911010224,alok.goel8@gmail.com,04/05/2026 12:00,Fruit Cake|bakery|2|150; Dhokla|namkeen|11|110,1510,DDU-GK
+Yogesh Mittal,09953010263,,04/05/2026 12:00,Kachori|namkeen|12|25; Atta Biscuits|bakery|1|60,360,DDU-CP
+Jyoti Verma,96540 10483,jyoti.verma17@gmail.com,04/05/2026 12:00,Rasmalai|sweets|1|260; Gulab Jamun|sweets|1|180; Fruit Cake|bakery|1|150,590,DDU-GK
+Varun Sharma,88260 10190,varun.sharma64@gmail.com,03/05/2026 12:00,Milk Cake|sweets|1|240,240,DDU-CP
+Gaurav Jain,919953010968,gaurav.jain93@gmail.com,03/05/2026 12:00,Atta Biscuits|bakery|2|60; Mathri|namkeen|8|80,760,DDU-GK
+Varun Verma,08826010822,,02/05/2026 12:00,Dhokla|namkeen|5|110,550,DDU-GK
+Rajesh Jain,88260 10304,rajesh.jain72@gmail.com,01/05/2026 12:00,Kachori|namkeen|4|25,100,DDU-NOIDA
+,+91-9953010411,,01/05/2026 12:00,Atta Biscuits|bakery|2|60; Kachori|namkeen|4|25; Fruit Cake|bakery|2|150,520,DDU-CP
+Deepak Saxena,+91-9953010630,deepak.saxena56@gmail.com,30/04/2026 12:00,Kaju 500g|dry-fruits|1|450; Rasgulla|sweets|2|160,770,DDU-CP
+Rohit Bansal,9911010854,,27/04/2026 12:00,Fruit Cake|bakery|2|150; Mathri|namkeen|8|80,940,DDU-NOIDA
+Seema Goel,9654010888,seema.goel17@gmail.com,27/04/2026 12:00,Samosa|namkeen|12|20; Dhokla|namkeen|10|110; Rasmalai|sweets|2|260,1860,DDU-GK
+Varun Goel,9911010042,varun.goel62@gmail.com,26/04/2026 12:00,Rasmalai|sweets|1|260; Kachori|namkeen|8|25,460,DDU-NOIDA
+Ritu Mittal,919811110075,,26/04/2026 12:00,Dhokla|namkeen|12|110; Fruit Cake|bakery|2|150; Atta Biscuits|bakery|1|60,1680,DDU-NOIDA
+Shobha Kapoor,919911010156,,26/04/2026 12:00,Atta Biscuits|bakery|1|60; Jalebi|sweets|2|120,300,DDU-NOIDA
+Nisha Agarwal,+91-9717010784,,26/04/2026 12:00,Dhokla|namkeen|5|110; Fruit Cake|bakery|2|150; Rasmalai|sweets|2|260,1370,DDU-NOIDA
+Rekha Malhotra,+91-8826010373,,24/04/2026 12:00,Atta Biscuits|bakery|2|60,120,DDU-CP
+Varun Sharma,+91-8826010190,varun.sharma64@gmail.com,23/04/2026 12:00,Kachori|namkeen|4|25,100,DDU-CP
+Rajesh Arora,+91-9953010564,rajesh.arora60@gmail.com,23/04/2026 12:00,Fruit Cake|bakery|1|150; Kachori|namkeen|12|25; Milk Cake|sweets|2|240,930,DDU-GK
+Swati Mehta,9654010669,swati.mehta89@gmail.com,23/04/2026 12:00,Dry Fruit Sweets Box|gift-boxes|3|850; Assorted Sweets Box|gift-boxes|1|650; Rasmalai|sweets|2|260,3720,DDU-CP
+Rajesh Kapoor,9810010116,rajesh.kapoor27@gmail.com,22/04/2026 12:00,Aloo Bhujia|namkeen|12|90,1080,DDU-CP
+Nitin Goel,919811110999,nitin.goel65@gmail.com,22/04/2026 12:00,Besan Ladoo|sweets|1|190; Atta Biscuits|bakery|1|60,250,DDU-NOIDA
+Manoj Sharma,919654010594,manoj.sharma34@gmail.com,20/04/2026 12:00,Assorted Sweets Box|gift-boxes|1|650; Kaju 500g|dry-fruits|2|450,1550,DDU-CP
+Tarun Agarwal,919654010743,tarun.agarwal32@gmail.com,19/04/2026 12:00,Milk Cake|sweets|1|240,240,DDU-CP
+Rahul Agarwal,918826011888,rahul.agarwal77@gmail.com,19/04/2026 12:00,Jalebi|sweets|2|120; Atta Biscuits|bakery|1|60,300,DDU-GK
+,+91-9953010411,,18/04/2026 12:00,Kachori|namkeen|12|25; Fruit Cake|bakery|2|150,600,DDU-CP
+Yogesh Mittal,9953010263,,17/04/2026 12:00,Gulab Jamun|sweets|2|180; Samosa|namkeen|12|20,600,DDU-CP
+,07838010931,,13/04/2026 12:00,Soan Papdi|sweets|2|150,300,DDU-NOIDA
+Seema Bansal,8826010705,seema.bansal30@gmail.com,12/04/2026 12:00,Soan Papdi|sweets|3|150; Jalebi|sweets|3|120,810,DDU-CP
+Varun Verma,88260 10822,,12/04/2026 12:00,Atta Biscuits|bakery|2|60,120,DDU-GK
+Varun Goel,919911010042,varun.goel62@gmail.com,08/04/2026 12:00,Fruit Cake|bakery|2|150,300,DDU-NOIDA
+Rajesh Arora,+91-9953010564,rajesh.arora60@gmail.com,08/04/2026 12:00,Aloo Bhujia|namkeen|6|90; Kachori|namkeen|7|25,715,DDU-GK
+Deepak Saxena,09953010630,deepak.saxena56@gmail.com,08/04/2026 12:00,Badam 500g|dry-fruits|2|380; Assorted Sweets Box|gift-boxes|3|650; Assorted Sweets Box|gift-boxes|1|650; Kaju Katli|sweets|1|275,3635,DDU-CP
+Rajesh Kapoor,+91-9810010116,rajesh.kapoor27@gmail.com,04/04/2026 12:00,Mathri|namkeen|7|80,560,DDU-CP
+Rekha Malhotra,08826010373,,04/04/2026 12:00,Aloo Bhujia|namkeen|6|90; Fruit Cake|bakery|2|150,840,DDU-CP
+Seema Goel,96540 10888,seema.goel17@gmail.com,02/04/2026 12:00,Atta Biscuits|bakery|2|60; Soan Papdi|sweets|1|150,270,DDU-GK
+Dinesh Mittal,919654011037,dinesh.mittal14@gmail.com,02/04/2026 12:00,Motichoor Ladoo|sweets|1|200; Fruit Cake|bakery|1|150,350,DDU-CP
+Pooja Mittal,9654011998,,01/04/2026 12:00,Motichoor Ladoo|sweets|2|200,400,DDU-GK
+,99530 10411,,31/03/2026 12:00,Fruit Cake|bakery|1|150; Fruit Cake|bakery|2|150,450,DDU-CP
+Yogesh Mittal,919953010263,,28/03/2026 12:00,Soan Papdi|sweets|2|150; Rasmalai|sweets|1|260,560,DDU-CP
+Gaurav Jain,99530 10968,gaurav.jain93@gmail.com,28/03/2026 12:00,Fruit Cake|bakery|1|150,150,DDU-GK
+Nisha Agarwal,9717010784,,23/03/2026 12:00,Rasmalai|sweets|2|260,520,DDU-NOIDA
+Neha Saxena,919654011265,,23/03/2026 12:00,Fruit Cake|bakery|2|150; Samosa|namkeen|11|20,520,DDU-NOIDA
+Rohit Bansal,09911010854,,22/03/2026 12:00,Kaju Katli|sweets|2|275; Atta Biscuits|bakery|1|60; Mathri|namkeen|8|80,1250,DDU-NOIDA
+,07838010931,,21/03/2026 12:00,Atta Biscuits|bakery|2|60; Motichoor Ladoo|sweets|1|200,320,DDU-NOIDA
+Nitin Goel,09811110999,nitin.goel65@gmail.com,20/03/2026 12:00,Atta Biscuits|bakery|2|60,120,DDU-NOIDA
+,+91-9811111374,,20/03/2026 12:00,Besan Ladoo|sweets|2|190; Dhokla|namkeen|11|110,1590,DDU-NOIDA
+Tarun Kapoor,97170 11114,tarun.kapoor33@gmail.com,18/03/2026 12:00,Mathri|namkeen|8|80,640,DDU-CP
+Rajesh Kapoor,+91-9810010116,rajesh.kapoor27@gmail.com,16/03/2026 12:00,Samosa|namkeen|12|20; Milk Cake|sweets|2|240,720,DDU-CP
+Rekha Malhotra,08826010373,,15/03/2026 12:00,Dhokla|namkeen|6|110; Aloo Bhujia|namkeen|6|90,1200,DDU-CP
+Swati Mehta,9654010669,swati.mehta89@gmail.com,15/03/2026 12:00,Badam 500g|dry-fruits|2|380; Pista 250g|dry-fruits|1|520; Badam 500g|dry-fruits|2|380; Pista 250g|dry-fruits|2|520,3080,DDU-CP
+Seema Bansal,8826010705,seema.bansal30@gmail.com,15/03/2026 12:00,Assorted Sweets Box|gift-boxes|1|650; Pista 250g|dry-fruits|3|520; Rasgulla|sweets|1|160; Rasgulla|sweets|3|160,2850,DDU-CP
+Manoj Sharma,+91-9654010594,manoj.sharma34@gmail.com,14/03/2026 12:00,Soan Papdi|sweets|1|150; Rasmalai|sweets|1|260; Premium Gift Box|gift-boxes|3|1200,4010,DDU-CP
+Tarun Agarwal,+91-9654010743,tarun.agarwal32@gmail.com,08/03/2026 12:00,Jalebi|sweets|2|120; Kaju Katli|sweets|2|275,790,DDU-CP
+Deepak Saxena,9953010630,deepak.saxena56@gmail.com,01/03/2026 12:00,Motichoor Ladoo|sweets|3|200; Gulab Jamun|sweets|2|180; Badam 500g|dry-fruits|1|380,1340,DDU-CP
+Rohit Bansal,99110 10854,,01/03/2026 12:00,Samosa|namkeen|12|20; Fruit Cake|bakery|2|150; Aloo Bhujia|namkeen|4|90,900,DDU-NOIDA
+Seema Goel,9654010888,seema.goel17@gmail.com,28/02/2026 12:00,Gulab Jamun|sweets|2|180,360,DDU-GK
+Meena Sharma,919654012042,meena.sharma86@gmail.com,22/02/2026 12:00,Jalebi|sweets|1|120,120,DDU-GK
+Seema Bansal,08826010705,seema.bansal30@gmail.com,14/02/2026 12:00,Gulab Jamun|sweets|1|180; Kaju 500g|dry-fruits|1|450,630,DDU-CP
+Swati Mehta,09654010669,swati.mehta89@gmail.com,12/02/2026 12:00,Pista 250g|dry-fruits|2|520; Kaju 500g|dry-fruits|1|450,1490,DDU-CP
+Tarun Agarwal,919654010743,tarun.agarwal32@gmail.com,12/02/2026 12:00,Kachori|namkeen|5|25; Fruit Cake|bakery|1|150,275,DDU-CP
+Nisha Agarwal,9717010784,,12/02/2026 12:00,Mathri|namkeen|5|80; Kachori|namkeen|9|25,625,DDU-NOIDA
+Manoj Sharma,919654010594,manoj.sharma34@gmail.com,10/02/2026 12:00,Premium Gift Box|gift-boxes|1|1200; Pista 250g|dry-fruits|3|520; Pista 250g|dry-fruits|2|520; Gulab Jamun|sweets|1|180,3980,DDU-CP
+Pooja Arora,9911011967,,10/02/2026 12:00,Motichoor Ladoo|sweets|2|200; Besan Ladoo|sweets|1|190,590,DDU-GK
+Tarun Kapoor,9717011114,tarun.kapoor33@gmail.com,09/02/2026 12:00,Fruit Cake|bakery|1|150; Fruit Cake|bakery|2|150,450,DDU-CP
+Seema Gupta,+91-9810011224,seema.gupta70@gmail.com,09/02/2026 12:00,Fruit Cake|bakery|1|150; Atta Biscuits|bakery|1|60; Kaju Katli|sweets|2|275,760,DDU-GK
+Nitin Goel,919811110999,nitin.goel65@gmail.com,04/02/2026 12:00,Motichoor Ladoo|sweets|1|200; Fruit Cake|bakery|1|150,350,DDU-NOIDA
+Arun Mehta,+91-9654011080,,24/01/2026 12:00,Aloo Bhujia|namkeen|6|90,540,DDU-CP
+Seema Bansal,08826010705,seema.bansal30@gmail.com,20/01/2026 12:00,Dry Fruit Sweets Box|gift-boxes|1|850; Badam 500g|dry-fruits|1|380; Badam 500g|dry-fruits|1|380; Kaju Katli|sweets|3|275,2435,DDU-CP
+Nisha Goel,09654011850,,19/01/2026 12:00,Atta Biscuits|bakery|2|60; Fruit Cake|bakery|2|150; Gulab Jamun|sweets|1|180,600,DDU-NOIDA
+Deepak Saxena,919953010630,deepak.saxena56@gmail.com,15/01/2026 12:00,Badam 500g|dry-fruits|2|380; Assorted Sweets Box|gift-boxes|3|650; Kaju 500g|dry-fruits|3|450,4060,DDU-CP
+Swati Mehta,96540 10669,swati.mehta89@gmail.com,09/01/2026 12:00,Besan Ladoo|sweets|1|190; Pista 250g|dry-fruits|2|520,1230,DDU-CP
+Sneha Arora,09953011925,sneha.arora55@gmail.com,09/01/2026 12:00,Kaju Katli|sweets|2|275,550,DDU-NOIDA
+Manoj Sharma,9654010594,manoj.sharma34@gmail.com,03/01/2026 12:00,Assorted Sweets Box|gift-boxes|2|650; Kaju 500g|dry-fruits|2|450; Pista 250g|dry-fruits|3|520,3760,DDU-CP
+,9811111374,,01/01/2026 12:00,Atta Biscuits|bakery|1|60; Aloo Bhujia|namkeen|10|90; Dhokla|namkeen|8|110,1840,DDU-NOIDA
+Seema Bansal,08826010705,seema.bansal30@gmail.com,22/12/2025 12:00,Rasgulla|sweets|1|160; Kaju 500g|dry-fruits|1|450; Badam 500g|dry-fruits|2|380; Soan Papdi|sweets|2|150,1670,DDU-CP
+Deepak Saxena,919953010630,deepak.saxena56@gmail.com,11/12/2025 12:00,Milk Cake|sweets|1|240; Soan Papdi|sweets|3|150; Dry Fruit Sweets Box|gift-boxes|1|850,1540,DDU-CP
+Swati Mehta,919654010669,swati.mehta89@gmail.com,08/12/2025 12:00,Rasgulla|sweets|1|160; Jalebi|sweets|1|120; Assorted Sweets Box|gift-boxes|1|650,930,DDU-CP
+Manoj Sharma,96540 10594,manoj.sharma34@gmail.com,01/12/2025 12:00,Kaju Katli|sweets|1|275; Assorted Sweets Box|gift-boxes|3|650; Badam 500g|dry-fruits|1|380; Badam 500g|dry-fruits|2|380,3365,DDU-CP
+Seema Bansal,08826010705,seema.bansal30@gmail.com,14/11/2025 12:00,Besan Ladoo|sweets|3|190; Rasmalai|sweets|2|260,1090,DDU-CP
+Swati Mehta,919654010669,swati.mehta89@gmail.com,07/11/2025 12:00,Dry Fruit Sweets Box|gift-boxes|2|850; Badam 500g|dry-fruits|2|380; Rasgulla|sweets|1|160,2620,DDU-CP
+Manoj Sharma,09654010594,manoj.sharma34@gmail.com,30/10/2025 12:00,Pista 250g|dry-fruits|1|520; Kaju Katli|sweets|2|275; Milk Cake|sweets|2|240; Dry Fruit Sweets Box|gift-boxes|2|850,3250,DDU-CP
+Seema Gupta,9810011224,seema.gupta70@gmail.com,20/10/2025 18:30,Rasmalai|sweets|3|260; Motichoor Ladoo|sweets|3|200,1380,DDU-GK
+Karan Verma,9810011295,karan.verma67@gmail.com,19/10/2025 18:30,Assorted Sweets Box|gift-boxes|2|650; Pista 250g|dry-fruits|2|520; Milk Cake|sweets|1|240,2580,DDU-NOIDA
+Harish Saxena,+91-9717011335,harish.saxena83@gmail.com,19/10/2025 18:30,Dry Fruit Sweets Box|gift-boxes|3|850; Rasmalai|sweets|2|260; Soan Papdi|sweets|1|150,3220,DDU-GK
+Dinesh Mittal,9654011037,dinesh.mittal14@gmail.com,18/10/2025 18:30,Soan Papdi|sweets|3|150; Milk Cake|sweets|2|240; Rasgulla|sweets|3|160; Premium Gift Box|gift-boxes|3|1200,5010,DDU-CP
+Tarun Kapoor,+91-9717011114,tarun.kapoor33@gmail.com,17/10/2025 18:30,Pista 250g|dry-fruits|3|520; Badam 500g|dry-fruits|2|380,2320,DDU-CP
+Rohit Kapoor,8826011152,,17/10/2025 18:30,Assorted Sweets Box|gift-boxes|1|650; Gulab Jamun|sweets|3|180; Assorted Sweets Box|gift-boxes|2|650,2490,DDU-GK
+Anita Sharma,+91-9953011184,,17/10/2025 18:30,Kaju 500g|dry-fruits|1|450; Assorted Sweets Box|gift-boxes|1|650,1100,DDU-GK
+Arun Mehta,919654011080,,15/10/2025 18:30,Pista 250g|dry-fruits|3|520; Badam 500g|dry-fruits|3|380,2700,DDU-CP
+Neha Saxena,96540 11265,,15/10/2025 18:30,Premium Gift Box|gift-boxes|2|1200; Dry Fruit Sweets Box|gift-boxes|1|850; Dry Fruit Sweets Box|gift-boxes|1|850,4100,DDU-NOIDA
+Sachin Gupta,09810011816,sachin.gupta23@gmail.com,17/09/2025 12:00,Kachori|namkeen|10|25; Atta Biscuits|bakery|2|60; Motichoor Ladoo|sweets|1|200,570,DDU-NOIDA
+Sanjay Chopra,9717011781,sanjay.chopra78@gmail.com,10/09/2025 12:00,Fruit Cake|bakery|2|150; Kaju Katli|sweets|2|275; Atta Biscuits|bakery|2|60,970,DDU-NOIDA
+Neha Saxena,09654011265,,04/08/2025 17:00,Premium Gift Box|gift-boxes|3|1200; Soan Papdi|sweets|1|150; Rasgulla|sweets|2|160; Assorted Sweets Box|gift-boxes|2|650,5370,DDU-NOIDA
+Karan Verma,+91-9810011295,karan.verma67@gmail.com,04/08/2025 17:00,Jalebi|sweets|2|120; Dry Fruit Sweets Box|gift-boxes|1|850; Assorted Sweets Box|gift-boxes|3|650; Assorted Sweets Box|gift-boxes|2|650,4340,DDU-NOIDA
+Tarun Kapoor,97170 11114,tarun.kapoor33@gmail.com,03/08/2025 17:00,Assorted Sweets Box|gift-boxes|1|650; Assorted Sweets Box|gift-boxes|3|650,2600,DDU-CP
+Harish Saxena,9717011335,harish.saxena83@gmail.com,03/08/2025 17:00,Kaju Katli|sweets|1|275; Gulab Jamun|sweets|3|180; Motichoor Ladoo|sweets|1|200; Motichoor Ladoo|sweets|3|200,1615,DDU-GK
+Bad Date Row,7838012079,,2026-13-45,Samosa|namkeen|4|20,80,DDU-GK
