@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@hpas/channels": "workspace:*",
     "@hpas/core": "workspace:*",
     "@hpas/db": "workspace:*",
     "@hpas/types": "workspace:*",

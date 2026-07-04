@@ -580,6 +580,53 @@ export async function campaignMessageStats(
   return row ?? { total: 0, control: 0, sent: 0, delivered: 0, read: 0, replied: 0, failed: 0 };
 }
 
+/**
+ * Redemptions attributed to a campaign: redemption events whose recorded
+ * code (items[0].name, set by the redemption endpoint/webhook) belongs to
+ * one of this campaign's messages.
+ */
+export async function countRedemptionsForCampaign(campaignId: string): Promise<number> {
+  const row = await queryOne<{ n: string }>(
+    `SELECT count(*)::text AS n
+     FROM events e
+     JOIN messages m ON m.redemption_code = e.items->0->>'name'
+     WHERE m.campaign_id = $1 AND e.event_type = 'redemption'
+       AND e.profile_id = m.profile_id`,
+    [campaignId]
+  );
+  return Number(row?.n ?? 0);
+}
+
+/** Monthly repeat-purchase rate for the trailing N months (insights chart). */
+export async function monthlyRepeatRate(
+  tenantId: string,
+  months: number
+): Promise<Array<{ month: string; buyers: number; repeaters: number; repeatRate: number }>> {
+  const rows = await query<any>(
+    `SELECT to_char(date_trunc('month', ts), 'YYYY-MM') AS month,
+            count(DISTINCT profile_id)::int AS buyers,
+            count(DISTINCT profile_id) FILTER (
+              WHERE profile_id IN (
+                SELECT profile_id FROM events e2
+                WHERE e2.tenant_id = $1 AND e2.event_type = 'purchase'
+                  AND date_trunc('month', e2.ts) = date_trunc('month', events.ts)
+                GROUP BY profile_id HAVING count(*) >= 2
+              )
+            )::int AS repeaters
+     FROM events
+     WHERE tenant_id = $1 AND event_type = 'purchase'
+       AND ts > now() - ($2 || ' months')::interval
+     GROUP BY 1 ORDER BY 1`,
+    [tenantId, String(months)]
+  );
+  return rows.map((r) => ({
+    month: r.month,
+    buyers: r.buyers,
+    repeaters: r.repeaters,
+    repeatRate: r.buyers > 0 ? Math.round((r.repeaters / r.buyers) * 1000) / 1000 : 0,
+  }));
+}
+
 // ---------- preferences ----------
 
 export async function upsertPreference(p: Preference): Promise<void> {

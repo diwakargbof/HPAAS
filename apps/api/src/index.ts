@@ -2,6 +2,9 @@ import express from "express";
 import cors from "cors";
 import { apiKeyAuth, loginHandler, sessionAuth } from "./auth.js";
 import { ingestRouter } from "./routes/ingest.js";
+import { appRouter } from "./routes/app.js";
+import { webhooksRouter } from "./routes/webhooks.js";
+import { redemptionsRouter } from "./routes/redemptions.js";
 
 const app = express();
 app.use(cors());
@@ -11,15 +14,16 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 
 app.post("/v1/auth/login", loginHandler);
 
-// Machine ingestion (POS → HPAS): API-key auth.
-app.use("/v1", apiKeyAuth, ingestRouter);
+// WhatsApp webhooks (Meta calls these; verified via token/signature, not API key).
+app.use("/v1/webhooks", webhooksRouter);
 
-// Dashboard routes (session auth) are mounted under /v1/app.
-export const appRouter: import("express").Router = express.Router();
+// Dashboard (session auth). Includes CSV upload via the shared ingest routes.
 app.use("/v1/app", sessionAuth, appRouter);
+app.use("/v1/app", sessionAuth, ingestRouter);
 
-// Dashboard file uploads reuse the same ingestion handlers with session auth.
-appRouter.use("/", ingestRouter);
+// Machine API (API-key auth): streaming events, uploads, POS redemptions.
+app.use("/v1", apiKeyAuth, ingestRouter);
+app.use("/v1", apiKeyAuth, redemptionsRouter);
 
 const port = Number(process.env.API_PORT ?? 4000);
 app.listen(port, () => console.log(`hpas api listening on :${port}`));

@@ -4,6 +4,17 @@
 
 import type { Features, Profile } from "@hpas/types";
 
+/** Every placeholder a campaign template may use; filled per-profile at send time. */
+export const TEMPLATE_VARIABLES = [
+  "name",
+  "favorite_item",
+  "category",
+  "days_since_visit",
+  "shop_name",
+  "redemption_code",
+  "festival_name",
+];
+
 export function renderTemplate(template: string, vars: Record<string, string>): string {
   return template.replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, key: string) => vars[key] ?? "");
 }

@@ -4,21 +4,10 @@
 
 import { generateCampaignCopy, type CopyRequest } from "@hpas/ai";
 import type { CopyGenerationContext, CopyGenerator } from "@hpas/core";
-import { activeFestivalWindow } from "@hpas/core";
+import { activeFestivalWindow, TEMPLATE_VARIABLES } from "@hpas/core";
 import { renderTemplate, variablesForProfile } from "@hpas/core";
 import type { GeneratedCopy } from "@hpas/types";
 import dayjs from "dayjs";
-
-/** Every placeholder a template may use; filled per-profile at send time. */
-export const TEMPLATE_VARIABLES = [
-  "name",
-  "favorite_item",
-  "category",
-  "days_since_visit",
-  "shop_name",
-  "redemption_code",
-  "festival_name",
-];
 
 export function makeCopyGenerator(): CopyGenerator {
   return async (ctx: CopyGenerationContext): Promise<GeneratedCopy> => {

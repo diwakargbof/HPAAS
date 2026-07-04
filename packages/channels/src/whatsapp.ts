@@ -202,9 +202,11 @@ export async function handleWhatsAppInboundWebhook(
         if (codeMatch) {
           const message = await getMessageByRedemptionCode(codeMatch[0]);
           if (message && message.profileId === profile.id) {
+            // The code is stored as items[0].name so attribution can join
+            // redemption events back to the campaign's messages.
             await insertEvent(tenantId, profile.id, {
               eventType: "redemption",
-              items: [],
+              items: [{ name: codeMatch[0], category: "redemption", qty: 1, unitPrice: 0 }],
               amount: 0,
               ts: new Date(),
               locationId: undefined,

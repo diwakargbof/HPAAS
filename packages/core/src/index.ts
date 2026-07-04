@@ -7,3 +7,4 @@ export * from "./suppression.js";
 export * from "./holdout.js";
 export * from "./triggers.js";
 export * from "./interpolate.js";
+export * from "./attribution.js";

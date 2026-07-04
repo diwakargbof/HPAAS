@@ -14,6 +14,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@hpas/channels':
+        specifier: workspace:*
+        version: link:../../packages/channels
       '@hpas/core':
         specifier: workspace:*
         version: link:../../packages/core
