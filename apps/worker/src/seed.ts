@@ -6,8 +6,10 @@
 //   pnpm db:seed --tenant dadus
 
 import {
+  backfillLoyaltyFromHistory,
   computeFeaturesForTenant,
   evaluateTriggersForTenant,
+  importMenuFromHistory,
   ingestNormalizedEvents,
   mapCsvRows,
   parseCsv,
@@ -79,6 +81,17 @@ export async function seedTenant(slug: string): Promise<void> {
 
   const { profiles } = await computeFeaturesForTenant(tenant);
   console.log(`[seed] features computed for ${profiles} profiles`);
+
+  // Loyalty: purchases ingested by this run already earned points inline;
+  // history that predates the loyalty ledger gets one backfill entry per
+  // profile (no-op unless the ledger is completely empty).
+  const backfilled = await backfillLoyaltyFromHistory(tenant);
+  if (backfilled > 0) console.log(`[seed] loyalty backfilled for ${backfilled} profiles`);
+
+  // Menu cold-start from sales history, so counter recommendations have a
+  // catalog to draw from on day one. Idempotent: skips existing names.
+  const menu = await importMenuFromHistory(tenant.id);
+  if (menu.imported > 0) console.log(`[seed] menu: imported ${menu.imported} items from history`);
 
   // Demo path: land one campaign per segment type in the approval queue so
   // the dashboard shows a working pilot immediately. ignoreFestivalWindow

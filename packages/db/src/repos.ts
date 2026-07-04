@@ -21,6 +21,7 @@ import type {
   ProfileTraits,
   Segment,
   SegmentRule,
+  SegmentSource,
   Tenant,
   TenantConfig,
   Upload,
@@ -78,6 +79,8 @@ const mapSegment = (r: any): Segment => ({
   name: r.name,
   rule: r.rule,
   campaignType: r.campaign_type,
+  description: r.description ?? null,
+  source: r.source ?? 'standard',
 });
 
 const mapCampaign = (r: any): Campaign => ({
@@ -364,17 +367,37 @@ export async function upsertSegment(
   tenantId: string,
   name: string,
   rule: SegmentRule,
-  campaignType: CampaignType
+  campaignType: CampaignType,
+  opts: { description?: string | null; source?: SegmentSource } = {}
 ): Promise<Segment> {
   const row = await queryOne(
-    `INSERT INTO segments (tenant_id, name, rule, campaign_type)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO segments (tenant_id, name, rule, campaign_type, description, source)
+     VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (tenant_id, name)
-       DO UPDATE SET rule = EXCLUDED.rule, campaign_type = EXCLUDED.campaign_type
+       DO UPDATE SET rule = EXCLUDED.rule, campaign_type = EXCLUDED.campaign_type,
+                     description = COALESCE(EXCLUDED.description, segments.description)
      RETURNING *`,
-    [tenantId, name, JSON.stringify(rule), campaignType]
+    [
+      tenantId,
+      name,
+      JSON.stringify(rule),
+      campaignType,
+      opts.description ?? null,
+      opts.source ?? "standard",
+    ]
   );
   return mapSegment(row);
+}
+
+/** Delete a segment — refused if any campaign ever ran against it (history stays). */
+export async function deleteSegment(tenantId: string, segmentId: string): Promise<boolean> {
+  const used = await queryOne(
+    `SELECT 1 FROM campaigns WHERE tenant_id = $1 AND segment_id = $2 LIMIT 1`,
+    [tenantId, segmentId]
+  );
+  if (used) return false;
+  await query(`DELETE FROM segments WHERE tenant_id = $1 AND id = $2`, [tenantId, segmentId]);
+  return true;
 }
 
 export async function listSegments(tenantId: string): Promise<Segment[]> {

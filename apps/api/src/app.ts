@@ -10,6 +10,9 @@ import { ingestRouter } from "./routes/ingest.js";
 import { appRouter } from "./routes/app.js";
 import { webhooksRouter } from "./routes/webhooks.js";
 import { redemptionsRouter } from "./routes/redemptions.js";
+import { segmentsRouter } from "./routes/segments.js";
+import { counterRouter } from "./routes/counter.js";
+import { menuRouter } from "./routes/menu.js";
 
 export const app: express.Express = express();
 app.use(cors());
@@ -25,7 +28,13 @@ app.use("/v1/webhooks", webhooksRouter);
 // Dashboard (session auth). Includes CSV upload via the shared ingest routes.
 app.use("/v1/app", sessionAuth, appRouter);
 app.use("/v1/app", sessionAuth, ingestRouter);
+app.use("/v1/app", sessionAuth, segmentsRouter);
+app.use("/v1/app", sessionAuth, counterRouter);
+app.use("/v1/app", sessionAuth, menuRouter);
 
-// Machine API (API-key auth): streaming events, uploads, POS redemptions.
+// Machine API (API-key auth): streaming events, uploads, POS redemptions,
+// and the counter card (so billing software can show it at checkout and
+// award/redeem points from the till).
 app.use("/v1", apiKeyAuth, ingestRouter);
 app.use("/v1", apiKeyAuth, redemptionsRouter);
+app.use("/v1", apiKeyAuth, counterRouter);

@@ -30,3 +30,4 @@ export * from "./email.js";
 export * from "./call-list.js";
 export * from "./campaign-sender.js";
 export * from "./fallback.js";
+export * from "./direct.js";

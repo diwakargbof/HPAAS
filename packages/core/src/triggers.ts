@@ -47,6 +47,8 @@ export interface TriggerOptions {
   ignoreFestivalWindow?: boolean;
   /** Don't recreate a campaign for a segment that had one within N days. */
   dedupeWindowDays?: number;
+  /** Evaluate only this segment (e.g. "Create campaign now" from the dashboard). */
+  segmentId?: string;
   generateCopy?: CopyGenerator;
   now?: Date;
 }
@@ -99,7 +101,10 @@ export async function evaluateTriggersForTenant(
   const dedupeDays = opts.dedupeWindowDays ?? 14;
   const results: TriggerResult[] = [];
 
-  for (const segment of await listSegments(tenant.id)) {
+  const segments = (await listSegments(tenant.id)).filter(
+    (s) => !opts.segmentId || s.id === opts.segmentId
+  );
+  for (const segment of segments) {
     // Festival campaigns only trigger inside a configured pre-festival window.
     if (segment.campaignType === "festival_preorder" && !opts.ignoreFestivalWindow) {
       const window = activeFestivalWindow(tenant, now);

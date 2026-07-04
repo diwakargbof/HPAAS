@@ -25,7 +25,18 @@ URL-safe unique identifier. Used as login tenant id and folder name.
 ### `modules`
 Which dashboard pages this tenant sees and in what nav order. Disable a module
 (`"enabled": false`) and its page and nav entry disappear — components never
-check the tenant name, only this config.
+check the tenant name, only this config. Available modules: `insights`,
+`segments` (AI segment builder), `campaigns`, `loyalty` (the Counter page:
+phone lookup, points, recommendations, 1:1 messages), `menu` (catalog that
+powers recommendations), `preferences`, `data`, `settings`.
+
+### `loyalty`
+Points program (optional — sensible defaults apply if omitted):
+- `enabled` — turn the program on/off for this tenant.
+- `pointsPerRupee` — earn rate; `0.1` = 1 point per ₹10 spent. Points are
+  awarded automatically on every ingested purchase, and backfilled once
+  from purchase history on first seed.
+- `pointValueRupees` — display value of one point when redeeming.
 
 ### `brandVoice`
 Fed verbatim to the AI copy generator (`packages/ai`):

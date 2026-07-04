@@ -13,6 +13,7 @@ import type {
 } from "@hpas/types";
 import { addWhatsappOptIn, insertEvent, upsertProfile } from "@hpas/db";
 import { normalizePhone } from "./phone.js";
+import { awardPurchasePoints } from "./loyalty.js";
 
 dayjs.extend(customParseFormat);
 
@@ -119,6 +120,9 @@ export async function ingestNormalizedEvents(
     await insertEvent(tenant.id, profile.id, e);
     if (e.eventType === "purchase") {
       await addWhatsappOptIn(tenant.id, e.phone, "pos_import");
+      // Loyalty earn lives in ingestion so points can never drift from the
+      // events table, whichever path (CSV or streaming) the purchase took.
+      await awardPurchasePoints(tenant, profile.id, e.amount);
     }
     processed++;
   }

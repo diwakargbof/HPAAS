@@ -12,7 +12,10 @@ import { clearSession, getSession, type Session } from "../lib/api";
 
 const MODULE_META: Record<ModuleKey, { label: string; path: string }> = {
   insights: { label: "My Customers", path: "/insights" },
+  segments: { label: "Segments", path: "/segments" },
   campaigns: { label: "Campaigns", path: "/campaigns" },
+  loyalty: { label: "Counter", path: "/loyalty" },
+  menu: { label: "Menu", path: "/menu" },
   preferences: { label: "Preferences", path: "/preferences" },
   data: { label: "Upload Data", path: "/data" },
   settings: { label: "Settings", path: "/settings" },

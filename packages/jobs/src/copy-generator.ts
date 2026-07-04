@@ -6,6 +6,7 @@ import { generateCampaignCopy, type CopyRequest } from "@hpas/ai";
 import type { CopyGenerationContext, CopyGenerator } from "@hpas/core";
 import { activeFestivalWindow, TEMPLATE_VARIABLES } from "@hpas/core";
 import { renderTemplate, variablesForProfile } from "@hpas/core";
+import { recentMenuItems } from "@hpas/db";
 import type { GeneratedCopy } from "@hpas/types";
 import dayjs from "dayjs";
 
@@ -15,6 +16,16 @@ export function makeCopyGenerator(): CopyGenerator {
 
     const festival =
       segment.campaignType === "festival_preorder" ? upcomingFestival(ctx) : undefined;
+
+    // New-item alerts get real, recently-added menu items to talk about.
+    const newItems =
+      segment.campaignType === "new_item_alert"
+        ? (await recentMenuItems(tenant.id, 30)).map((m) => ({
+            name: m.name,
+            category: m.category,
+            price: m.price,
+          }))
+        : undefined;
 
     const request: CopyRequest = {
       shopName: tenant.config.branding.shopName,
@@ -33,6 +44,7 @@ export function makeCopyGenerator(): CopyGenerator {
         daysSinceLastVisit: features.recencyDays,
       })),
       festival,
+      newItems,
     };
 
     const copy = await generateCampaignCopy(request);

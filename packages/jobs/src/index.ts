@@ -1,4 +1,5 @@
 export * from "./copy-generator.js";
+export * from "./counter-card.js";
 export * from "./compute-features.js";
 export * from "./evaluate-triggers.js";
 export * from "./send-campaigns.js";

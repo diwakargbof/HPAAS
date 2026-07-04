@@ -11,18 +11,24 @@ actually exercises a second tenant end to end).
 
 Two very different halves, kept strictly apart:
 
-1. **Deterministic logic (everything except one function):** ingestion,
-   profiles, RFM/affinity features, segmentation, triggers, suppression,
-   hold-out control, sending, attribution. Plain TypeScript + Postgres.
-   **No LLM anywhere here.**
-2. **Generation (one narrow slice):** `packages/ai` turns *segment + sample
-   customer data + brand voice* into **one message template per campaign**
-   (`"Namaste {{name}} ji! Your favorite {{favorite_item}}..."`). That single
-   call is the only LLM call site in the codebase. The template is cached on
-   the campaign row; at send time a plain string-interpolation function fills
-   each customer's variables. One AI call per campaign, never per message.
-   The provider is swappable behind `CopyProvider` (Anthropic today; a mock
-   provider runs the whole demo offline when no API key is set).
+1. **Deterministic logic (the vast majority):** ingestion, profiles,
+   RFM/affinity features, segment *evaluation*, triggers, suppression,
+   hold-out control, loyalty points, recommendation *ranking*, sending,
+   attribution. Plain TypeScript + Postgres. **No LLM anywhere here.**
+2. **Generation (`packages/ai` — four narrow functions, the only LLM call
+   sites, all authoring-time or cached, never in a send loop):**
+   - `generateCampaignCopy` — one template per campaign, cached on the row;
+     send time is plain string interpolation
+   - `authorSegmentFromPrompt` — the owner's words → segment rule **as
+     data**; the deterministic whitelisted compiler is still the only thing
+     that turns rules into SQL, so a hallucinated column dies at preview
+   - `discoverSegments` — aggregate, PII-free stats → proposed segments
+     with live audience sizes, saved only on the owner's tap
+   - `generateCounterPitch` — one cashier line per customer, cached 24h;
+     AI cost scales with actual counter footfall, not customer count
+
+   The provider is swappable behind one interface (Anthropic today; a mock
+   provider runs everything offline when no API key is set).
 
 Multi-tenancy is row-level and query-enforced: every table carries
 `tenant_id`, every query-layer function requires it, and API tenants resolve
@@ -40,12 +46,15 @@ hpas/
 ├── packages/
 │   ├── db/           Postgres schema, migrations, tenant-scoped typed queries
 │   ├── core/         the "brain": phone normalization, ingestion, features,
-│   │                 segment rules, suppression, hold-out, triggers, attribution
-│   ├── channels/     WhatsApp (stub/live) + email + call-list behind one send()
-│   ├── ai/           the single generation function (Anthropic behind CopyProvider)
+│   │                 segment rules, suppression, hold-out, triggers, attribution,
+│   │                 loyalty points, counter-recommendation ranking, menu import
+│   ├── channels/     WhatsApp (stub/live) + email + call-list + 1:1 direct notes
+│   ├── ai/           the ONLY LLM call sites: campaign copy, segment authoring,
+│   │                 segment discovery, counter pitch (Anthropic behind one
+│   │                 swappable interface; deterministic mock when no API key)
 │   ├── jobs/          the 4 scheduled jobs (features, triggers, send, fallback) +
-│   │                  AI-copy wiring — shared by apps/worker's cron AND apps/api's
-│   │                  Vercel Cron endpoints, so the logic exists exactly once
+│   │                  AI-copy wiring + counter-card builder — shared by
+│   │                  apps/worker's cron AND apps/api (incl. Vercel Cron)
 │   └── types/        shared domain types incl. TenantConfig
 └── tenants/
     ├── dadus/        config.json + seed-data.csv (186 mock POS rows)
@@ -113,6 +122,30 @@ delivery webhooks, replies, redemption codes
       ▼
 attribution: messaged vs control → incremental repeat rate + revenue
 ```
+
+## The AI-native surface
+
+Beyond campaigns, the dashboard has three hyper-personalization modules
+(all per-tenant config — a shop can turn any of them off):
+
+- **Segments** (`/segments`): the four standard segments plus two AI paths —
+  type an audience in plain words ("big spenders who love gift boxes but
+  haven't visited in 45 days") and preview the live audience before saving,
+  or tap *Suggest segments* and the AI studies the shop's own aggregate
+  numbers (recency buckets, category spend, LTV quartiles — no PII leaves
+  the DB) and proposes named, sized segments. Any segment → *Create
+  campaign now* → the normal approval queue, suppression included.
+- **Counter** (`/loyalty`): type a customer's phone when they walk up and
+  get the full card — who they are, loyalty balance (auto-earned on every
+  ingested purchase, backfilled from history), 2-3 ranked suggestions from
+  their own co-purchase graph + reorder timing + untried menu items +
+  festival context, and a one-line pitch to say out loud. Award/redeem
+  points and send a personal WhatsApp note from the same screen. The same
+  card is exposed to POS software at `GET /v1/counter?phone=` (API key).
+- **Menu** (`/menu`): the shop's catalog with prices and stock toggles —
+  one tap imports it from sales history. Recommendations only ever suggest
+  items that are on the menu and in stock, and new-item campaign copy can
+  name real recently-added products.
 
 ## Onboarding a second shop (no code)
 
@@ -204,3 +237,13 @@ See `.env.example` — everything has a working default except `DATABASE_URL`.
 | `GET /v1/app/attribution/:id` | session | messaged-vs-control report |
 | `GET/PUT /v1/app/preferences` | session | toggles + frequency cap |
 | `GET /v1/app/settings` | session | WhatsApp status, branding, API key |
+| `GET /v1/app/segments` | session | segments with live audience sizes |
+| `POST /v1/app/segments/preview` | session | plain words → AI rule + audience preview |
+| `POST /v1/app/segments/discover` | session | AI-proposed segments from aggregate stats |
+| `POST /v1/app/segments` | session | save a previewed segment (rule re-validated) |
+| `POST /v1/app/segments/:id/run` | session | create a campaign now → approval queue |
+| `DELETE /v1/app/segments/:id` | session | delete (refused if campaign history exists) |
+| `GET /v1/{app/}counter?phone=` | session or API key | counter card: loyalty + recommendations + pitch |
+| `POST /v1/{app/}loyalty/adjust` | session or API key | award/redeem points (balance-guarded) |
+| `POST /v1/{app/}direct-message` | session or API key | 1:1 note (kept out of attribution) |
+| `GET/POST /v1/app/menu` + item routes | session | catalog CRUD + import-from-history |

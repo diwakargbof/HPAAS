@@ -14,6 +14,9 @@ importers:
 
   apps/api:
     dependencies:
+      '@hpas/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@hpas/channels':
         specifier: workspace:*
         version: link:../../packages/channels

@@ -76,7 +76,8 @@ async function wipePreviousRun(): Promise<void> {
   if (t.rows.length === 0) return;
   const id = t.rows[0].id;
   await pool.query(`DELETE FROM messages WHERE campaign_id IN (SELECT id FROM campaigns WHERE tenant_id = $1)`, [id]);
-  for (const table of ["campaigns", "segments", "features", "events", "whatsapp_templates", "whatsapp_opt_ins", "opt_outs", "preferences", "uploads", "profiles", "tenants"]) {
+  // FK order: everything referencing profiles must go before profiles.
+  for (const table of ["loyalty_ledger", "direct_messages", "counter_cards", "menu_items", "campaigns", "segments", "features", "events", "whatsapp_templates", "whatsapp_opt_ins", "opt_outs", "preferences", "uploads", "profiles", "tenants"]) {
     await pool.query(`DELETE FROM ${table} WHERE ${table === "tenants" ? "id" : "tenant_id"} = $1`, [id]);
   }
 }

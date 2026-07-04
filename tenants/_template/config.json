@@ -11,10 +11,18 @@
   },
   "modules": {
     "insights": { "enabled": true, "order": 1 },
-    "campaigns": { "enabled": true, "order": 2 },
-    "preferences": { "enabled": true, "order": 3 },
-    "data": { "enabled": true, "order": 4 },
-    "settings": { "enabled": true, "order": 5 }
+    "segments": { "enabled": true, "order": 2 },
+    "campaigns": { "enabled": true, "order": 3 },
+    "loyalty": { "enabled": true, "order": 4 },
+    "menu": { "enabled": true, "order": 5 },
+    "preferences": { "enabled": true, "order": 6 },
+    "data": { "enabled": true, "order": 7 },
+    "settings": { "enabled": true, "order": 8 }
+  },
+  "loyalty": {
+    "enabled": true,
+    "pointsPerRupee": 0.1,
+    "pointValueRupees": 0.25
   },
   "brandVoice": {
     "tone": "describe how the shop talks to customers, e.g. 'friendly and to the point'",

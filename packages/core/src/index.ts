@@ -8,3 +8,6 @@ export * from "./holdout.js";
 export * from "./triggers.js";
 export * from "./interpolate.js";
 export * from "./attribution.js";
+export * from "./recommendations.js";
+export * from "./loyalty.js";
+export * from "./menu.js";

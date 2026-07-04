@@ -8,7 +8,10 @@
 
 export type ModuleKey =
   | "insights"
+  | "segments"
   | "campaigns"
+  | "loyalty"
+  | "menu"
   | "preferences"
   | "data"
   | "settings";
@@ -80,14 +83,30 @@ export interface ChannelSettings {
   callList: { enabled: boolean; minLtvThreshold: number };
 }
 
+export interface LoyaltyConfig {
+  enabled: boolean;
+  /** Points earned per rupee spent, e.g. 0.1 = 1 point per ₹10. */
+  pointsPerRupee: number;
+  /** Redemption value of one point in rupees (display/guidance only). */
+  pointValueRupees: number;
+}
+
 export interface TenantConfig {
   slug: string;
   branding: TenantBranding;
-  modules: Record<ModuleKey, { enabled: boolean; order: number }>;
+  /** Partial: tenants only list the modules they use; missing = hidden. */
+  modules: Partial<Record<ModuleKey, { enabled: boolean; order: number }>>;
   brandVoice: BrandVoice;
   festivals: FestivalConfigEntry[];
   posColumnMapping: PosColumnMapping;
   channels: ChannelSettings;
+  /** Optional — defaults applied in code when absent (see loyaltyConfig()). */
+  loyalty?: LoyaltyConfig;
+}
+
+/** Loyalty settings with defaults for tenants configured before the feature existed. */
+export function loyaltyConfig(config: TenantConfig): LoyaltyConfig {
+  return config.loyalty ?? { enabled: true, pointsPerRupee: 0.1, pointValueRupees: 0.25 };
 }
 
 export interface Tenant {
@@ -197,12 +216,18 @@ export type RuleCondition =
 
 export type SegmentRule = Record<string, RuleCondition>;
 
+/** Where a segment came from: seeded standard, owner-typed via AI, or AI-discovered. */
+export type SegmentSource = "standard" | "custom" | "ai_suggested";
+
 export interface Segment {
   id: string;
   tenantId: string;
   name: string;
   rule: SegmentRule;
   campaignType: CampaignType;
+  /** Plain-English meaning of the rule, shown to the shop owner. */
+  description: string | null;
+  source: SegmentSource;
 }
 
 // ---------- Campaigns & messages ----------
@@ -318,5 +343,76 @@ export interface AttributionReport {
   controlRevenuePerCustomer: number;
   incrementalRevenuePerCustomer: number;
   redemptions: number;
+  computedAt: string;
+}
+
+// ---------- Menu ----------
+
+export interface MenuItem {
+  id: string;
+  tenantId: string;
+  name: string;
+  category: string;
+  price: number;
+  description: string | null;
+  tags: string[];
+  available: boolean;
+  createdAt: Date;
+}
+
+// ---------- Loyalty ----------
+
+/** Append-only points ledger; balance is the sum of entries. */
+export interface LoyaltyEntry {
+  id: string;
+  tenantId: string;
+  profileId: string;
+  /** Positive = earned/awarded, negative = redeemed/adjusted down. */
+  points: number;
+  reason: string;
+  createdAt: Date;
+}
+
+// ---------- Direct (1:1) messages ----------
+// Separate from campaign messages on purpose: personal notes from the shop
+// owner must never pollute campaign attribution or hold-out accounting.
+
+export type DirectMessageStatus = "sent" | "failed";
+
+export interface DirectMessage {
+  id: string;
+  tenantId: string;
+  profileId: string;
+  channel: Channel;
+  body: string;
+  status: DirectMessageStatus;
+  sentBy: string;
+  sentAt: Date;
+}
+
+// ---------- Counter recommendations ----------
+
+export interface CounterRecommendation {
+  item: string;
+  category: string;
+  /** From the menu when one exists, else median observed price. */
+  price: number | null;
+  /** Plain-English reason the cashier can say out loud. */
+  reason: string;
+  /** Which signal ranked it: pairs_with | due_reorder | category_new | festival. */
+  signal: string;
+}
+
+export interface CounterCard {
+  profileId: string;
+  name: string | null;
+  phone: string;
+  lastVisitDays: number | null;
+  favoriteItem: string | null;
+  loyalty: { balance: number; valueRupees: number };
+  recommendations: CounterRecommendation[];
+  /** One-line cashier pitch (AI-written, cached ~24h; deterministic fallback). */
+  pitch: string;
+  activeFestival: string | null;
   computedAt: string;
 }
