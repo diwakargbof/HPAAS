@@ -54,6 +54,9 @@ importers:
       '@hpas/ai':
         specifier: workspace:*
         version: link:../../packages/ai
+      '@hpas/channels':
+        specifier: workspace:*
+        version: link:../../packages/channels
       '@hpas/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -85,6 +88,22 @@ importers:
       '@anthropic-ai/sdk':
         specifier: ^0.90.0
         version: 0.90.0
+      '@hpas/types':
+        specifier: workspace:*
+        version: link:../types
+    devDependencies:
+      typescript:
+        specifier: ^5.5.4
+        version: 5.9.3
+
+  packages/channels:
+    dependencies:
+      '@hpas/core':
+        specifier: workspace:*
+        version: link:../core
+      '@hpas/db':
+        specifier: workspace:*
+        version: link:../db
       '@hpas/types':
         specifier: workspace:*
         version: link:../types
