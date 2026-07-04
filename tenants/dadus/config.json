@@ -1,0 +1,56 @@
+{
+  "slug": "dadus",
+  "branding": {
+    "shopName": "Dadu's",
+    "logoUrl": "/tenants/dadus/logo.png",
+    "colors": {
+      "primary": "#8B4513",
+      "accent": "#F4A460",
+      "background": "#FFF8F0"
+    }
+  },
+  "modules": {
+    "insights": { "enabled": true, "order": 1 },
+    "campaigns": { "enabled": true, "order": 2 },
+    "preferences": { "enabled": true, "order": 3 },
+    "data": { "enabled": true, "order": 4 },
+    "settings": { "enabled": true, "order": 5 }
+  },
+  "brandVoice": {
+    "tone": "warm, familial, like a trusted neighbourhood halwai; light Hindi-English mix",
+    "language": "en-IN",
+    "samplePhrases": [
+      "Namaste ji!",
+      "Fresh from our kitchen this morning",
+      "Your sweet tooth remembers us, we know"
+    ],
+    "avoid": [
+      "discount-heavy language",
+      "SALE/OFFER in all caps",
+      "marketing jargon"
+    ]
+  },
+  "festivals": [
+    { "name": "Raksha Bandhan", "date": "2026-08-28", "preWindowDays": 10, "categories": ["sweets", "gift-boxes"] },
+    { "name": "Diwali", "date": "2026-11-08", "preWindowDays": 14, "categories": ["sweets", "gift-boxes", "dry-fruits"] },
+    { "name": "Holi", "date": "2027-03-22", "preWindowDays": 7, "categories": ["sweets", "namkeen"] }
+  ],
+  "posColumnMapping": {
+    "phone": "Customer Mobile",
+    "name": "Customer Name",
+    "email": "Customer Email",
+    "amount": "Bill Amount",
+    "items": "Items",
+    "itemsDelimiter": ";",
+    "itemFormat": "name|category|qty|unitPrice",
+    "itemPartsDelimiter": "|",
+    "timestamp": "Bill Date",
+    "dateFormat": "DD/MM/YYYY HH:mm",
+    "locationId": "Store Code"
+  },
+  "channels": {
+    "whatsapp": { "enabled": true, "number": "+911140401234" },
+    "email": { "enabled": true, "fromAddress": "hello@dadus.example" },
+    "callList": { "enabled": true, "minLtvThreshold": 5000 }
+  }
+}

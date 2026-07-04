@@ -1,0 +1,51 @@
+{
+  "slug": "your-shop-slug",
+  "branding": {
+    "shopName": "Your Shop Name",
+    "logoUrl": "/tenants/your-shop-slug/logo.png",
+    "colors": {
+      "primary": "#1E5128",
+      "accent": "#4E9F3D",
+      "background": "#F8FBF6"
+    }
+  },
+  "modules": {
+    "insights": { "enabled": true, "order": 1 },
+    "campaigns": { "enabled": true, "order": 2 },
+    "preferences": { "enabled": true, "order": 3 },
+    "data": { "enabled": true, "order": 4 },
+    "settings": { "enabled": true, "order": 5 }
+  },
+  "brandVoice": {
+    "tone": "describe how the shop talks to customers, e.g. 'friendly and to the point'",
+    "language": "en-IN",
+    "samplePhrases": ["phrases the shop actually uses with customers"],
+    "avoid": ["things the shop never says"]
+  },
+  "festivals": [
+    {
+      "name": "Diwali",
+      "date": "2026-11-08",
+      "preWindowDays": 14,
+      "categories": ["categories this festival drives for this shop"]
+    }
+  ],
+  "posColumnMapping": {
+    "phone": "<CSV header for customer phone>",
+    "name": "<CSV header for customer name (optional — delete if absent)>",
+    "email": "<CSV header for customer email (optional — delete if absent)>",
+    "amount": "<CSV header for bill total>",
+    "items": "<CSV header for the items cell>",
+    "itemsDelimiter": ";",
+    "itemFormat": "name|category|qty|unitPrice",
+    "itemPartsDelimiter": "|",
+    "timestamp": "<CSV header for bill date/time>",
+    "dateFormat": "DD/MM/YYYY HH:mm",
+    "locationId": "<CSV header for store/branch code (optional — delete if absent)>"
+  },
+  "channels": {
+    "whatsapp": { "enabled": true, "number": "+91XXXXXXXXXX" },
+    "email": { "enabled": false, "fromAddress": "hello@yourshop.example" },
+    "callList": { "enabled": true, "minLtvThreshold": 5000 }
+  }
+}

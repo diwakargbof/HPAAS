@@ -1,0 +1,20 @@
+{
+  "name": "hpas",
+  "private": true,
+  "version": "0.1.0",
+  "description": "HPAS — multi-tenant, AI-powered customer engagement platform for small retail shops (WhatsApp-first)",
+  "type": "module",
+  "scripts": {
+    "db:migrate": "pnpm --filter @hpas/db migrate",
+    "db:seed": "pnpm --filter @hpas/worker seed",
+    "dev:api": "pnpm --filter @hpas/api dev",
+    "dev:worker": "pnpm --filter @hpas/worker dev",
+    "dev:dashboard": "pnpm --filter @hpas/dashboard dev",
+    "worker": "pnpm --filter @hpas/worker run-job",
+    "smoke": "pnpm --filter @hpas/worker smoke",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  }
+}
