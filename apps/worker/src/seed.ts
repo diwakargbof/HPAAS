@@ -7,12 +7,21 @@
 
 import {
   computeFeaturesForTenant,
+  evaluateTriggersForTenant,
   ingestNormalizedEvents,
   mapCsvRows,
   parseCsv,
   seedStandardSegments,
 } from "@hpas/core";
-import { closePool, createTenant, createUpload, finishUpload, upsertPreference } from "@hpas/db";
+import { makeCopyGenerator } from "./copy-generator.js";
+import {
+  closePool,
+  createTenant,
+  createUpload,
+  finishUpload,
+  queryOne,
+  upsertPreference,
+} from "@hpas/db";
 import { ALL_CAMPAIGN_TYPES } from "@hpas/types";
 import { apiKeyForSlug, listTenantSlugs, readSeedCsv, readTenantConfig } from "./tenant-files.js";
 
@@ -39,7 +48,14 @@ export async function seedTenant(slug: string): Promise<void> {
   await seedStandardSegments(tenant.id);
   console.log(`[seed] standard segments + default preferences in place`);
 
-  const csv = readSeedCsv(slug);
+  // Events are append-only: re-ingesting the same CSV would duplicate
+  // history, so seed ingestion only runs on a tenant with no events yet.
+  const existing = await queryOne<{ n: string }>(
+    `SELECT count(*)::text AS n FROM events WHERE tenant_id = $1`,
+    [tenant.id]
+  );
+  const hasEvents = Number(existing?.n ?? 0) > 0;
+  const csv = hasEvents ? null : readSeedCsv(slug);
   if (csv) {
     const uploadRow = await createUpload(tenant.id, "seed-data.csv");
     const rows = parseCsv(csv);
@@ -54,11 +70,31 @@ export async function seedTenant(slug: string): Promise<void> {
     );
     console.log(`[seed] ingested ${processed}/${rows.length} rows (${errors.length} row errors)`);
   } else {
-    console.log(`[seed] no seed-data.csv — skipping ingestion`);
+    console.log(
+      hasEvents
+        ? `[seed] events already present — skipping CSV ingestion`
+        : `[seed] no seed-data.csv — skipping ingestion`
+    );
   }
 
   const { profiles } = await computeFeaturesForTenant(tenant);
   console.log(`[seed] features computed for ${profiles} profiles`);
+
+  // Demo path: land one campaign per segment type in the approval queue so
+  // the dashboard shows a working pilot immediately. ignoreFestivalWindow
+  // is demo-only — the cron trigger always respects festival windows.
+  const results = await evaluateTriggersForTenant(tenant, {
+    ignoreFestivalWindow: true,
+    generateCopy: makeCopyGenerator(),
+  });
+  for (const r of results) {
+    console.log(
+      `[seed] ${r.segment}: ${r.outcome}` +
+        (r.outcome === "campaign_created"
+          ? ` (audience=${r.audienceSize}, control=${r.controlCount})`
+          : ` (${r.reason})`)
+    );
+  }
 }
 
 const isDirectRun = process.argv[1]?.replace(/\\/g, "/").endsWith("seed.ts");
