@@ -28,8 +28,10 @@ const OPERATORS: Record<string, string> = {
 export function compileRule(rule: SegmentRule): { whereSql: string; params: unknown[] } {
   const clauses: string[] = [];
   const params: unknown[] = [];
-  // $1 is reserved for tenant_id in selectAudience
-  const next = () => `$${params.length + 2}`;
+  // $1 is reserved for tenant_id in selectAudience; params are pushed
+  // before next() is called, so the just-pushed param is at index
+  // params.length, i.e. placeholder $(length + 1).
+  const next = () => `$${params.length + 1}`;
 
   for (const [column, condition] of Object.entries(rule)) {
     if (!COLUMNS.has(column)) throw new Error(`rule references unknown column "${column}"`);
@@ -43,8 +45,9 @@ export function compileRule(rule: SegmentRule): { whereSql: string; params: unkn
     for (const [op, value] of Object.entries(condition)) {
       if (op === "in") {
         if (!Array.isArray(value)) throw new Error(`"in" needs an array`);
+        const cast = value.every((v) => typeof v === "number") ? "numeric[]" : "text[]";
         params.push(value);
-        clauses.push(`${column} = ANY(${next()})`);
+        clauses.push(`${column} = ANY(${next()}::${cast})`);
       } else if (op === "gte_col" || op === "lte_col") {
         // Compare against another features column, e.g. recency_days >= reorder_cadence_days
         const other = String(value);

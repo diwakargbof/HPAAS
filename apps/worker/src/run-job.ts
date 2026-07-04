@@ -1,9 +1,11 @@
 // Run one worker job by name:  pnpm worker <job>
 import { closePool } from "@hpas/db";
 import { computeFeaturesJob } from "./jobs/compute-features.js";
+import { evaluateTriggersJob } from "./jobs/evaluate-triggers.js";
 
 export const JOBS: Record<string, () => Promise<void>> = {
   "compute-features": computeFeaturesJob,
+  "evaluate-triggers": evaluateTriggersJob,
 };
 
 const name = process.argv[2];

@@ -12,7 +12,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@hpas/ai": "workspace:*",
     "@hpas/core": "workspace:*",
+    "dayjs": "^1.11.11",
     "@hpas/db": "workspace:*",
     "@hpas/types": "workspace:*",
     "node-cron": "^3.0.3"
