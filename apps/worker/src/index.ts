@@ -1,9 +1,10 @@
-// Long-running worker: cron schedules for all background jobs.
+// Long-running worker: cron schedules for all background jobs. This is the
+// entrypoint for a persistent-host deployment (Railway/Render/Fly/VM). On
+// Vercel, the same job functions run instead as Vercel Cron-triggered HTTP
+// endpoints — see apps/api/api/cron/*.ts — so this process is never used
+// there.
 import cron from "node-cron";
-import { computeFeaturesJob } from "./jobs/compute-features.js";
-import { evaluateTriggersJob } from "./jobs/evaluate-triggers.js";
-import { sendCampaignsJob } from "./jobs/send-campaigns.js";
-import { emailFallbackJob } from "./jobs/email-fallback.js";
+import { computeFeaturesJob, evaluateTriggersJob, sendCampaignsJob, emailFallbackJob } from "@hpas/jobs";
 
 function safely(name: string, fn: () => Promise<void>): () => void {
   return () => {

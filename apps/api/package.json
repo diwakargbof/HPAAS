@@ -12,6 +12,7 @@
     "@hpas/channels": "workspace:*",
     "@hpas/core": "workspace:*",
     "@hpas/db": "workspace:*",
+    "@hpas/jobs": "workspace:*",
     "@hpas/types": "workspace:*",
     "cors": "^2.8.5",
     "express": "^4.19.2",

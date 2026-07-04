@@ -31,20 +31,30 @@ from credentials (API key or session token), never from request bodies.
 ```
 hpas/
 ├── apps/
-│   ├── api/          REST API: auth, ingestion, approval queue, webhooks (:4000)
+│   ├── api/          Express app (apps/api/src) — auth, ingestion, approval
+│   │                 queue, webhooks. Runs persistently (:4000) via src/index.ts,
+│   │                 OR as Vercel Serverless Functions via api/ — see DEPLOYMENT.md
 │   ├── dashboard/    Next.js shop-owner app, tenant-themed (:3000)
-│   └── worker/       cron jobs: features, triggers, sends, fallback + seed/smoke
+│   └── worker/       persistent node-cron scheduler + seed/smoke CLIs
+│                     (not used on the Vercel path — see packages/jobs)
 ├── packages/
 │   ├── db/           Postgres schema, migrations, tenant-scoped typed queries
 │   ├── core/         the "brain": phone normalization, ingestion, features,
 │   │                 segment rules, suppression, hold-out, triggers, attribution
 │   ├── channels/     WhatsApp (stub/live) + email + call-list behind one send()
 │   ├── ai/           the single generation function (Anthropic behind CopyProvider)
+│   ├── jobs/          the 4 scheduled jobs (features, triggers, send, fallback) +
+│   │                  AI-copy wiring — shared by apps/worker's cron AND apps/api's
+│   │                  Vercel Cron endpoints, so the logic exists exactly once
 │   └── types/        shared domain types incl. TenantConfig
 └── tenants/
     ├── dadus/        config.json + seed-data.csv (186 mock POS rows)
     └── _template/    copy to onboard a new shop; every field documented
 ```
+
+**Deploying?** See [DEPLOYMENT.md](./DEPLOYMENT.md) for the Supabase + Vercel
+path (serverless API + Vercel Cron, no persistent processes). Everything
+below is the local/self-hosted workflow.
 
 ## Quickstart (fully offline — no API keys needed)
 
@@ -125,8 +135,10 @@ See `.env.example` — everything has a working default except `DATABASE_URL`.
 | Variable | Purpose |
 |---|---|
 | `DATABASE_URL` | Postgres connection (database `hpas`) |
+| `DIRECT_DATABASE_URL` | optional — non-pooled connection, preferred for migrations (Supabase) |
 | `AUTH_SECRET` | HMAC secret for session tokens + derived API keys |
 | `DEMO_PASSWORD` | dashboard login password (demo auth) |
+| `CRON_SECRET` | required on Vercel only — authorizes Vercel Cron to call `/api/cron/*` |
 | `ANTHROPIC_API_KEY` | optional — empty uses the deterministic mock copywriter |
 | `ANTHROPIC_MODEL` | default `claude-opus-4-8` |
 | `WHATSAPP_MODE` | `stub` (default) or `live` (needs Meta BSP credentials) |
@@ -134,10 +146,21 @@ See `.env.example` — everything has a working default except `DATABASE_URL`.
 
 ## Design decisions & assumptions
 
-- **pnpm workspaces (no Turborepo).** 3 apps + 5 packages don't need remote
+- **pnpm workspaces (no Turborepo).** 3 apps + 6 packages don't need remote
   caching; Turborepo can be layered on later without restructuring. Packages
   are consumed as TypeScript source (`tsx` at runtime, `transpilePackages`
   for Next) — no build orchestration needed at this scale.
+- **Call-list CSVs are stored in the database** (`campaigns.call_list_csv`),
+  not written to local disk — a deploy-target-neutral choice that also
+  happens to be required on Vercel, where the filesystem outside `/tmp` is
+  read-only and nothing written to disk survives between invocations.
+  Downloaded on demand via `GET /v1/app/campaigns/:id/call-list.csv`.
+- **Deploy-target-neutral by construction**: `apps/api`'s Express app
+  (`src/app.ts`) doesn't call `listen()` itself — `src/index.ts` does that
+  for a persistent host, while `api/index.ts` exports the same app for
+  Vercel to invoke as a serverless function. The four scheduled jobs
+  (`packages/jobs`) are called identically by `apps/worker`'s `node-cron`
+  loop or by Vercel Cron–triggered endpoints — same job code either way.
 - **WhatsApp fully stubbed** (as agreed): the adapter models the real Meta
   Cloud API constraints — **pre-approved templates only** (no approved
   template = refused send), opt-in store, webhook handlers for delivery
@@ -177,6 +200,7 @@ See `.env.example` — everything has a working default except `DATABASE_URL`.
 | `POST /v1/app/campaigns/:id/approve` | session | **the** send gate |
 | `POST /v1/app/campaigns/:id/reject` | session | reject |
 | `PUT /v1/app/campaigns/:id/template` | session | edit copy (validated) |
+| `GET /v1/app/campaigns/:id/call-list.csv` | session | download the human call-list CSV |
 | `GET /v1/app/attribution/:id` | session | messaged-vs-control report |
 | `GET/PUT /v1/app/preferences` | session | toggles + frequency cap |
 | `GET /v1/app/settings` | session | WhatsApp status, branding, API key |

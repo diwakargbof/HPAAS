@@ -13,7 +13,7 @@ import {
   parseCsv,
   seedStandardSegments,
 } from "@hpas/core";
-import { makeCopyGenerator } from "./copy-generator.js";
+import { makeCopyGenerator } from "@hpas/jobs";
 import {
   closePool,
   createTenant,

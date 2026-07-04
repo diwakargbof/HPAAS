@@ -1,6 +1,6 @@
 import { evaluateTriggersForTenant } from "@hpas/core";
 import { listTenants } from "@hpas/db";
-import { makeCopyGenerator } from "../copy-generator.js";
+import { makeCopyGenerator } from "./copy-generator.js";
 
 /** Daily trigger evaluation: enroll matching audiences into pending_approval campaigns. */
 export async function evaluateTriggersJob(): Promise<void> {

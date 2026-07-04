@@ -70,3 +70,23 @@ export async function api<T = unknown>(
   }
   return res.json() as Promise<T>;
 }
+
+/** Download an /v1/app file endpoint (e.g. call-list CSV) with auth attached. */
+export async function downloadFile(path: string, filename: string): Promise<void> {
+  const session = getSession();
+  if (!session) {
+    window.location.href = "/";
+    return;
+  }
+  const res = await fetch(`${API_BASE}/v1/app${path}`, {
+    headers: { Authorization: `Bearer ${session.token}` },
+  });
+  if (!res.ok) throw new Error(`download failed (${res.status})`);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}

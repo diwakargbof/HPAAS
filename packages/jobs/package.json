@@ -1,27 +1,22 @@
 {
-  "name": "@hpas/worker",
+  "name": "@hpas/jobs",
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "start": "tsx src/index.ts",
-    "seed": "tsx src/seed.ts",
-    "run-job": "tsx src/run-job.ts",
-    "smoke": "tsx src/smoke.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@hpas/ai": "workspace:*",
     "@hpas/channels": "workspace:*",
     "@hpas/core": "workspace:*",
     "@hpas/db": "workspace:*",
-    "@hpas/jobs": "workspace:*",
     "@hpas/types": "workspace:*",
-    "node-cron": "^3.0.3"
+    "dayjs": "^1.11.11"
   },
   "devDependencies": {
-    "@types/node-cron": "^3.0.11",
-    "tsx": "^4.16.2",
     "typescript": "^5.5.4"
   }
 }

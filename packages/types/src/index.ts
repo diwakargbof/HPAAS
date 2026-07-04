@@ -237,6 +237,8 @@ export interface Campaign {
   createdAt: Date;
   approvedAt: Date | null;
   approvedBy: string | null;
+  /** Call-list CSV for high-LTV customers routed to a human call, if any were. */
+  callListCsv: string | null;
 }
 
 export type Channel = "whatsapp" | "email" | "call";

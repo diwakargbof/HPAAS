@@ -90,6 +90,7 @@ const mapCampaign = (r: any): Campaign => ({
   createdAt: r.created_at,
   approvedAt: r.approved_at,
   approvedBy: r.approved_by,
+  callListCsv: r.call_list_csv,
 });
 
 const mapMessage = (r: any): Message => ({
@@ -455,6 +456,18 @@ export async function setCampaignCopy(
     tenantId,
     campaignId,
     JSON.stringify(copy),
+  ]);
+}
+
+export async function setCampaignCallListCsv(
+  tenantId: string,
+  campaignId: string,
+  csv: string
+): Promise<void> {
+  await query(`UPDATE campaigns SET call_list_csv = $3 WHERE tenant_id = $1 AND id = $2`, [
+    tenantId,
+    campaignId,
+    csv,
   ]);
 }
 

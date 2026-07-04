@@ -24,7 +24,7 @@ import {
   upsertPreference,
 } from "@hpas/db";
 import { ALL_CAMPAIGN_TYPES, type NormalizedEvent, type TenantConfig } from "@hpas/types";
-import { makeCopyGenerator } from "./copy-generator.js";
+import { makeCopyGenerator } from "@hpas/jobs";
 import { apiKeyForSlug } from "./tenant-files.js";
 
 const SLUG = "smoketest";

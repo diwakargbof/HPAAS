@@ -4,8 +4,6 @@
 // control rows. Called from the API on "Approve & Send" and by the worker
 // as a safety net for approved-but-unsent campaigns.
 
-import fs from "node:fs";
-import path from "node:path";
 import type { Campaign, Channel, Tenant } from "@hpas/types";
 import {
   getCampaign,
@@ -14,6 +12,7 @@ import {
   getSegment,
   messagesForCampaign,
   query,
+  setCampaignCallListCsv,
   setCampaignStatus,
   updateMessageStatus,
 } from "@hpas/db";
@@ -27,13 +26,13 @@ export interface SendCampaignResult {
   failed: number;
   callList: number;
   control: number;
-  callListFile: string | null;
+  /** True once the call-list CSV has been stored — download via the API. */
+  callListReady: boolean;
 }
 
 export async function sendApprovedCampaign(
   tenant: Tenant,
-  campaignId: string,
-  opts: { exportsDir?: string } = {}
+  campaignId: string
 ): Promise<SendCampaignResult> {
   const campaign = await getCampaign(tenant.id, campaignId);
   if (!campaign) throw new Error(`campaign ${campaignId} not found for tenant`);
@@ -65,7 +64,7 @@ export async function sendApprovedCampaign(
   const callThreshold = tenant.config.channels.callList.minLtvThreshold;
   const callListEnabled = tenant.config.channels.callList.enabled;
 
-  const result: SendCampaignResult = { sent: 0, failed: 0, callList: 0, control: 0, callListFile: null };
+  const result: SendCampaignResult = { sent: 0, failed: 0, callList: 0, control: 0, callListReady: false };
   const callEntries: CallListEntry[] = [];
 
   for (const message of messages) {
@@ -125,11 +124,8 @@ export async function sendApprovedCampaign(
   }
 
   if (callEntries.length > 0) {
-    const dir = opts.exportsDir ?? path.resolve(process.cwd(), "exports");
-    fs.mkdirSync(dir, { recursive: true });
-    const file = path.join(dir, `call-list-${tenant.config.slug}-${campaign.id.slice(0, 8)}.csv`);
-    fs.writeFileSync(file, buildCallListCsv(tenant, callEntries));
-    result.callListFile = file;
+    await setCampaignCallListCsv(tenant.id, campaign.id, buildCallListCsv(tenant, callEntries));
+    result.callListReady = true;
   }
 
   await setCampaignStatus(tenant.id, campaign.id, "sent");

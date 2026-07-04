@@ -14,7 +14,7 @@ export async function sendCampaignsJob(): Promise<void> {
       console.log(
         `[send] ${tenant.name} campaign ${campaign.id.slice(0, 8)}: ` +
           `sent=${result.sent} callList=${result.callList} failed=${result.failed} control=${result.control}` +
-          (result.callListFile ? ` (call list: ${result.callListFile})` : "")
+          (result.callListReady ? " (call list ready for download)" : "")
       );
     }
   }

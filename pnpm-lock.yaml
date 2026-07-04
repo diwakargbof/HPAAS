@@ -23,6 +23,9 @@ importers:
       '@hpas/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@hpas/jobs':
+        specifier: workspace:*
+        version: link:../../packages/jobs
       '@hpas/types':
         specifier: workspace:*
         version: link:../../packages/types
@@ -85,9 +88,6 @@ importers:
 
   apps/worker:
     dependencies:
-      '@hpas/ai':
-        specifier: workspace:*
-        version: link:../../packages/ai
       '@hpas/channels':
         specifier: workspace:*
         version: link:../../packages/channels
@@ -97,12 +97,12 @@ importers:
       '@hpas/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@hpas/jobs':
+        specifier: workspace:*
+        version: link:../../packages/jobs
       '@hpas/types':
         specifier: workspace:*
         version: link:../../packages/types
-      dayjs:
-        specifier: ^1.11.11
-        version: 1.11.21
       node-cron:
         specifier: ^3.0.3
         version: 3.0.3
@@ -183,6 +183,31 @@ importers:
       tsx:
         specifier: ^4.16.2
         version: 4.23.0
+      typescript:
+        specifier: ^5.5.4
+        version: 5.9.3
+
+  packages/jobs:
+    dependencies:
+      '@hpas/ai':
+        specifier: workspace:*
+        version: link:../ai
+      '@hpas/channels':
+        specifier: workspace:*
+        version: link:../channels
+      '@hpas/core':
+        specifier: workspace:*
+        version: link:../core
+      '@hpas/db':
+        specifier: workspace:*
+        version: link:../db
+      '@hpas/types':
+        specifier: workspace:*
+        version: link:../types
+      dayjs:
+        specifier: ^1.11.11
+        version: 1.11.21
+    devDependencies:
       typescript:
         specifier: ^5.5.4
         version: 5.9.3

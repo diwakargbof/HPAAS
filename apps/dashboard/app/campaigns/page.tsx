@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import AppShell from "../../components/AppShell";
-import { api } from "../../lib/api";
+import { api, downloadFile } from "../../lib/api";
 
 interface CampaignItem {
   id: string;
@@ -34,6 +34,7 @@ interface CampaignItem {
     messagedCount: number;
     redemptions: number;
   } | null;
+  hasCallList: boolean;
 }
 
 const TYPE_LABEL: Record<string, string> = {
@@ -178,12 +179,13 @@ export default function CampaignsPage() {
                   <th className="num">Replied</th>
                   <th className="num">Codes used</th>
                   <th className="num">Extra revenue</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
                 {history.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="muted">
+                    <td colSpan={7} className="muted">
                       No campaigns sent yet.
                     </td>
                   </tr>
@@ -208,6 +210,17 @@ export default function CampaignsPage() {
                             c.attribution.incrementalRevenuePerCustomer * c.attribution.messagedCount
                           ).toLocaleString("en-IN")}`
                         : "—"}
+                    </td>
+                    <td>
+                      {c.hasCallList && (
+                        <button
+                          className="btn btn-ghost"
+                          style={{ padding: "4px 10px", fontSize: "0.82rem" }}
+                          onClick={() => downloadFile(`/campaigns/${c.id}/call-list.csv`, `call-list-${c.id.slice(0, 8)}.csv`)}
+                        >
+                          Call list
+                        </button>
+                      )}
                     </td>
                   </tr>
                 ))}

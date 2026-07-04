@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "HPAS — multi-tenant, AI-powered customer engagement platform for small retail shops (WhatsApp-first)",
   "type": "module",
+  "packageManager": "pnpm@9.15.9",
   "scripts": {
     "db:migrate": "pnpm --filter @hpas/db migrate",
     "db:seed": "pnpm --filter @hpas/worker seed",

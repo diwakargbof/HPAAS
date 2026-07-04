@@ -116,6 +116,7 @@ appRouter.get("/campaigns", async (req, res) => {
         copy: c.generatedCopy,
         stats,
         attribution,
+        hasCallList: Boolean(c.callListCsv),
       };
     })
   );
@@ -137,6 +138,22 @@ appRouter.post("/campaigns/:id/approve", async (req, res) => {
   await setCampaignStatus(tenant.id, campaign.id, "approved", tenant.config.slug);
   const result = await sendApprovedCampaign(tenant, campaign.id);
   res.json({ ok: true, result });
+});
+
+/** Download the call-list CSV (high-LTV customers routed to a human call), if any. */
+appRouter.get("/campaigns/:id/call-list.csv", async (req, res) => {
+  const tenant = req.tenant!;
+  const campaign = await getCampaign(tenant.id, req.params.id);
+  if (!campaign || !campaign.callListCsv) {
+    res.status(404).json({ error: "no call list for this campaign" });
+    return;
+  }
+  res.setHeader("Content-Type", "text/csv");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="call-list-${campaign.id.slice(0, 8)}.csv"`
+  );
+  res.send(campaign.callListCsv);
 });
 
 appRouter.post("/campaigns/:id/reject", async (req, res) => {
