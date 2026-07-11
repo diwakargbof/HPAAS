@@ -1,5 +1,4 @@
 {
-  "buildCommand": "cd ../.. && pnpm build:packages",
   "rewrites": [{ "source": "/(.*)", "destination": "/api" }],
   "crons": [
     { "path": "/api/cron/nightly", "schedule": "30 20 * * *" },

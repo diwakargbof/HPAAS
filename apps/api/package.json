@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "NODE_OPTIONS=--conditions=development tsx watch src/index.ts",
     "start": "NODE_OPTIONS=--conditions=development tsx src/index.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "bundle-vercel-functions": "node scripts/build-vercel-functions.mjs"
   },
   "dependencies": {
     "@hpas/ai": "workspace:*",
@@ -16,8 +17,10 @@
     "@hpas/jobs": "workspace:*",
     "@hpas/types": "workspace:*",
     "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "multer": "^1.4.5-lts.1",
+    "pg": "^8.12.0",
     "qrcode": "^1.5.4"
   },
   "devDependencies": {
@@ -25,6 +28,7 @@
     "@types/express": "^4.17.21",
     "@types/multer": "^1.4.11",
     "@types/qrcode": "^1.5.6",
+    "esbuild": "^0.23.1",
     "tsx": "^4.16.2",
     "typescript": "^5.5.4"
   }
