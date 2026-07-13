@@ -124,10 +124,15 @@ graph TD
   order as a purchase (points included), claims the token idempotently, and replies with a
   welcome + optional coupon. Printable SVG at `GET /q/:token/qr.svg`. Config:
   `qrCapture.{enabled,messageTemplate}` in tenant config (template must keep `{{token}}`).
+  The dashboard's QR desk (/data) lets the shop pick real items from its own `menu-catalog`
+  (qty picker, auto-fills the amount from menu prices, still manually overridable) instead of
+  free-typing an amount only — `items` travels with the order and lands on the purchase record
+  once claimed.
   *Files:* `apps/api/src/routes/qr-orders.ts`, claim handling in
-  `packages/channels/src/whatsapp.ts`, repos in `packages/db/src/repos-engage.ts`.
+  `packages/channels/src/whatsapp.ts`, repos in `packages/db/src/repos-engage.ts`,
+  dashboard picker in `apps/dashboard/app/data/page.tsx`.
   *Depends on:* `ingestion`, `whatsapp-webhooks`, `coupon-engine`, `order-receipts`
-  (welcome sender), `phone-normalization`, `db-layer`.
+  (welcome sender), `phone-normalization`, `db-layer`, `menu-catalog` (dashboard item picker).
   *Used by:* `dashboard-app` (/data QR desk).
 
 ## 4. Deterministic campaign brain (`packages/core` — no LLM anywhere here)
@@ -324,7 +329,7 @@ graph TD
   *Files:* `packages/core/src/menu.ts`, `apps/api/src/routes/menu.ts`,
   `apps/dashboard/app/menu/page.tsx`, repos in `packages/db/src/repos-ai.ts`.
   *Depends on:* `db-layer`. *Used by:* `counter-recommendations`, `ai-campaign-copy`,
-  `tenant-onboarding`.
+  `tenant-onboarding`, `qr-order-capture` (dashboard item picker for QR orders).
 
 ## 8. Apps & operations
 
