@@ -4,9 +4,10 @@
 // tablet at the till or the billing software would show.
 
 import { Router } from "express";
-import { normalizePhone } from "@hpas/core";
+import { ingestNormalizedEvents, normalizePhone } from "@hpas/core";
 import { buildCounterCard } from "@hpas/jobs";
 import { sendDirectMessage } from "@hpas/channels";
+import type { EventItem } from "@hpas/types";
 import {
   addLoyaltyPoints,
   directMessagesForProfile,
@@ -38,6 +39,54 @@ counterRouter.get("/counter", async (req, res) => {
     directMessagesForProfile(tenant.id, profile.id, 5),
   ]);
   res.json({ card, ledger, recentMessages });
+});
+
+/**
+ * A walk-up customer the counter has never seen: create their profile with
+ * a name (never just a phone number) and, if they're buying right now,
+ * record that first purchase through the same ingestion path as CSV/QR —
+ * so points accrue identically regardless of entry point.
+ */
+counterRouter.post("/counter/new-customer", async (req, res) => {
+  const tenant = req.tenant!;
+  const phone = normalizePhone(String(req.body?.phone ?? ""));
+  const name = String(req.body?.name ?? "").trim();
+  if (!phone) {
+    res.status(400).json({ error: "valid phone is required" });
+    return;
+  }
+  if (!name) {
+    res.status(400).json({ error: "name is required" });
+    return;
+  }
+  if (await getProfileByPhone(tenant.id, phone)) {
+    res.status(409).json({ error: "a customer with that number already exists — look them up instead" });
+    return;
+  }
+
+  const items: EventItem[] = Array.isArray(req.body?.items)
+    ? req.body.items.map((it: Partial<EventItem>) => ({
+        name: String(it.name ?? ""),
+        category: String(it.category ?? "uncategorized"),
+        qty: Number(it.qty) || 1,
+        unitPrice: Number(it.unitPrice) || 0,
+      }))
+    : [];
+  const amount = items.reduce((sum, it) => sum + it.qty * it.unitPrice, 0);
+
+  await ingestNormalizedEvents(tenant, [
+    {
+      tenantId: tenant.id,
+      phone,
+      traits: { name },
+      locationId: undefined,
+      eventType: amount > 0 ? "purchase" : "opt_in",
+      items,
+      amount,
+      ts: new Date(),
+    },
+  ]);
+  res.json({ phone });
 });
 
 /** Manual points adjustment (award a bonus, redeem at the till). */

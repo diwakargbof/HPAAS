@@ -18,18 +18,49 @@ function publicBaseUrl(req: import("express").Request): string {
   return process.env.PUBLIC_API_URL ?? `${req.protocol}://${req.get("host")}`;
 }
 
-function prefilledMessage(tenant: Tenant, token: string): string {
+/**
+ * The {{name}} slot is what lets the inbound webhook read the customer's
+ * name straight out of the message text (see NAME_FROM_MESSAGE_RE in
+ * whatsapp.ts) instead of depending on their WhatsApp account having a
+ * display name set at all.
+ */
+function prefilledMessage(tenant: Tenant, token: string, name: string): string {
   const template =
     qrCaptureConfig(tenant.config).messageTemplate ??
-    "Hi {{shop_name}}! Adding my order {{token}} to my rewards ✨";
+    "Hi {{shop_name}}! This is {{name}}, adding my order {{token}} to my rewards ✨";
   return template
     .replaceAll("{{shop_name}}", tenant.config.branding.shopName)
+    .replaceAll("{{name}}", name)
     .replaceAll("{{token}}", token);
 }
 
-function waLink(tenant: Tenant, token: string): string {
+function waLink(tenant: Tenant, token: string, name: string): string {
   const number = tenant.whatsappNumber.replace(/\D/g, "");
-  return `https://wa.me/${number}?text=${encodeURIComponent(prefilledMessage(tenant, token))}`;
+  return `https://wa.me/${number}?text=${encodeURIComponent(prefilledMessage(tenant, token, name))}`;
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
+}
+
+function namePromptPage(tenant: Tenant, token: string): string {
+  const shop = escapeHtml(tenant.config.branding.shopName);
+  return `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${shop} — join on WhatsApp</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:420px;margin:60px auto;padding:0 20px;color:#2a2420}
+h1{font-size:1.3rem}
+input{width:100%;padding:12px;font-size:1rem;border:1px solid #ccc;border-radius:8px;margin:12px 0;box-sizing:border-box}
+button{width:100%;padding:12px;font-size:1rem;border:none;border-radius:8px;background:#25D366;color:#fff;font-weight:600}
+</style></head><body>
+<h1>${shop}</h1>
+<p>What's your name? We'll use it to greet you on WhatsApp.</p>
+<form method="get" action="/q/${encodeURIComponent(token)}">
+  <input name="name" placeholder="Your name" required maxlength="80" autofocus>
+  <button type="submit">Continue to WhatsApp</button>
+</form>
+</body></html>`;
 }
 
 function qrOrderView(req: import("express").Request, tenant: Tenant, qr: QrOrder) {
@@ -38,7 +69,9 @@ function qrOrderView(req: import("express").Request, tenant: Tenant, qr: QrOrder
     ...qr,
     claimUrl: `${base}/q/${qr.token}`,
     qrSvgUrl: `${base}/q/${qr.token}/qr.svg`,
-    waLink: waLink(tenant, qr.token),
+    // Real customers go through claimUrl (the name prompt), not this one —
+    // this is just an informational preview for the dashboard.
+    waLink: waLink(tenant, qr.token, "there"),
   };
 }
 
@@ -91,7 +124,12 @@ qrOrdersRouter.get("/qr-orders", async (req, res) => {
 
 export const qrPublicRouter: import("express").Router = Router();
 
-/** The QR points here; we bounce straight into WhatsApp with the pre-draft. */
+/**
+ * The QR points here. First visit: ask for the customer's name (so the
+ * webhook can read it out of the message text rather than hoping their
+ * WhatsApp account has a display name set). Once ?name= is present, bounce
+ * straight into WhatsApp with the pre-draft.
+ */
 qrPublicRouter.get("/:token", async (req, res) => {
   const qr = await getQrOrderByToken(String(req.params.token).toUpperCase());
   const tenant = qr && (await getTenantById(qr.tenantId));
@@ -99,9 +137,14 @@ qrPublicRouter.get("/:token", async (req, res) => {
     res.status(404).send("This QR code is not valid.");
     return;
   }
+  const name = String(req.query.name ?? "").trim();
+  if (!name) {
+    res.type("html").send(namePromptPage(tenant, qr.token));
+    return;
+  }
   // Already-claimed tokens still open the chat — harmless, and the webhook
   // claim is idempotent either way.
-  res.redirect(302, waLink(tenant, qr.token));
+  res.redirect(302, waLink(tenant, qr.token, name));
 });
 
 /** Printable QR (SVG) encoding the claim URL above. */

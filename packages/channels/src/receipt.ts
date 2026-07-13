@@ -4,10 +4,12 @@
 // campaign approval gate; they do respect opt-outs. Recorded in
 // transactional_messages, never in campaign messages.
 //
-// TODO(whatsapp-live): receipts/welcomes are Meta "utility" templates —
-// submit them for review and send via the template API. Inside the 24h
-// service window (QR welcome always is: the customer just messaged us)
-// free-form text is allowed. In stub mode we record the send.
+// The QR welcome is always sent inside Meta's 24h customer-service window
+// (the customer just messaged us to claim their order), so it goes out as
+// free-form text — no approved template required. A receipt fired from a
+// bulk CSV import may be outside that window; for production at scale
+// that should move to an approved "utility" template, but free-form is
+// fine for a live demo. In stub mode we just record the send.
 
 import {
   describeCouponValue,
@@ -31,6 +33,8 @@ import {
   loyaltyBalance,
 } from "@hpas/db";
 
+const GRAPH_API_BASE = "https://graph.facebook.com/v20.0";
+
 export async function sendTransactionalWhatsApp(
   tenant: Tenant,
   profile: Pick<Profile, "id" | "phone">,
@@ -40,12 +44,29 @@ export async function sendTransactionalWhatsApp(
   const optedOut = await getOptedOutPhones(tenant.id);
   const blocked = optedOut.has(profile.phone);
 
+  let liveSendFailed = false;
   if (!blocked && process.env.WHATSAPP_MODE === "live") {
-    // TODO(whatsapp-live): send the approved utility template (receipt) or
-    // free-form text inside the service window (qr_welcome).
+    const res = await fetch(`${GRAPH_API_BASE}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        to: profile.phone.replace(/\D/g, ""),
+        type: "text",
+        text: { body },
+      }),
+    });
+    if (!res.ok) {
+      liveSendFailed = true;
+      const errBody = await res.json().catch(() => ({}));
+      console.error(`[whatsapp] transactional send (${kind}) failed:`, errBody);
+    }
   }
 
-  const status = blocked ? "failed" : "sent";
+  const status = blocked || liveSendFailed ? "failed" : "sent";
   await insertTransactionalMessage({
     tenantId: tenant.id,
     profileId: profile.id,

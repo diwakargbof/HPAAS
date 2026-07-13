@@ -1964,12 +1964,32 @@ async function importMenuFromHistory(tenantId) {
 }
 
 // ../../packages/channels/dist/receipt.js
+var GRAPH_API_BASE = "https://graph.facebook.com/v20.0";
 async function sendTransactionalWhatsApp(tenant, profile, kind, body) {
   const optedOut = await getOptedOutPhones(tenant.id);
   const blocked = optedOut.has(profile.phone);
+  let liveSendFailed = false;
   if (!blocked && process.env.WHATSAPP_MODE === "live") {
+    const res = await fetch(`${GRAPH_API_BASE}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        messaging_product: "whatsapp",
+        to: profile.phone.replace(/\D/g, ""),
+        type: "text",
+        text: { body }
+      })
+    });
+    if (!res.ok) {
+      liveSendFailed = true;
+      const errBody = await res.json().catch(() => ({}));
+      console.error(`[whatsapp] transactional send (${kind}) failed:`, errBody);
+    }
   }
-  const status = blocked ? "failed" : "sent";
+  const status = blocked || liveSendFailed ? "failed" : "sent";
   await insertTransactionalMessage({
     tenantId: tenant.id,
     profileId: profile.id,
@@ -2063,7 +2083,8 @@ async function sendQrWelcome(tenant, profile, qr, coupon) {
 var cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 
 // ../../packages/channels/dist/whatsapp.js
-var GRAPH_API_BASE = "https://graph.facebook.com/v20.0";
+var GRAPH_API_BASE2 = "https://graph.facebook.com/v20.0";
+var NAME_FROM_MESSAGE_RE = /this is\s+([^,]{1,80}),\s*adding my order/i;
 function mode() {
   return process.env.WHATSAPP_MODE === "live" ? "live" : "stub";
 }
@@ -2096,7 +2117,7 @@ async function sendViaWhatsApp(tenant, profile, renderedText, meta) {
   if (mode() === "stub") {
     return { ok: true, providerMessageId: `stub-wa-${meta.messageId}` };
   }
-  const res = await fetch(`${GRAPH_API_BASE}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+  const res = await fetch(`${GRAPH_API_BASE2}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
@@ -2157,7 +2178,10 @@ async function handleWhatsAppInboundWebhook(tenantId, payload) {
         const text = msg?.text?.body ?? "";
         if (!phone)
           continue;
-        const profile = await upsertProfile(tenantId, phone, {});
+        const nameFromText = text.match(NAME_FROM_MESSAGE_RE)?.[1]?.trim();
+        const contact = (change?.value?.contacts ?? []).find((c) => c?.wa_id === msg?.from);
+        const name = nameFromText || contact?.profile?.name;
+        const profile = await upsertProfile(tenantId, phone, name ? { name } : {});
         await insertEvent(tenantId, profile.id, {
           eventType: "message_reply",
           items: [],
@@ -9251,6 +9275,43 @@ counterRouter.get("/counter", async (req, res) => {
   ]);
   res.json({ card, ledger, recentMessages });
 });
+counterRouter.post("/counter/new-customer", async (req, res) => {
+  const tenant = req.tenant;
+  const phone = normalizePhone(String(req.body?.phone ?? ""));
+  const name = String(req.body?.name ?? "").trim();
+  if (!phone) {
+    res.status(400).json({ error: "valid phone is required" });
+    return;
+  }
+  if (!name) {
+    res.status(400).json({ error: "name is required" });
+    return;
+  }
+  if (await getProfileByPhone(tenant.id, phone)) {
+    res.status(409).json({ error: "a customer with that number already exists \u2014 look them up instead" });
+    return;
+  }
+  const items = Array.isArray(req.body?.items) ? req.body.items.map((it) => ({
+    name: String(it.name ?? ""),
+    category: String(it.category ?? "uncategorized"),
+    qty: Number(it.qty) || 1,
+    unitPrice: Number(it.unitPrice) || 0
+  })) : [];
+  const amount = items.reduce((sum, it) => sum + it.qty * it.unitPrice, 0);
+  await ingestNormalizedEvents(tenant, [
+    {
+      tenantId: tenant.id,
+      phone,
+      traits: { name },
+      locationId: void 0,
+      eventType: amount > 0 ? "purchase" : "opt_in",
+      items,
+      amount,
+      ts: /* @__PURE__ */ new Date()
+    }
+  ]);
+  res.json({ phone });
+});
 counterRouter.post("/loyalty/adjust", async (req, res) => {
   const tenant = req.tenant;
   const profileId = String(req.body?.profileId ?? "");
@@ -9341,13 +9402,35 @@ var qrOrdersRouter = Router8();
 function publicBaseUrl(req) {
   return process.env.PUBLIC_API_URL ?? `${req.protocol}://${req.get("host")}`;
 }
-function prefilledMessage(tenant, token) {
-  const template = qrCaptureConfig(tenant.config).messageTemplate ?? "Hi {{shop_name}}! Adding my order {{token}} to my rewards \u2728";
-  return template.replaceAll("{{shop_name}}", tenant.config.branding.shopName).replaceAll("{{token}}", token);
+function prefilledMessage(tenant, token, name) {
+  const template = qrCaptureConfig(tenant.config).messageTemplate ?? "Hi {{shop_name}}! This is {{name}}, adding my order {{token}} to my rewards \u2728";
+  return template.replaceAll("{{shop_name}}", tenant.config.branding.shopName).replaceAll("{{name}}", name).replaceAll("{{token}}", token);
 }
-function waLink(tenant, token) {
+function waLink(tenant, token, name) {
   const number = tenant.whatsappNumber.replace(/\D/g, "");
-  return `https://wa.me/${number}?text=${encodeURIComponent(prefilledMessage(tenant, token))}`;
+  return `https://wa.me/${number}?text=${encodeURIComponent(prefilledMessage(tenant, token, name))}`;
+}
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+function namePromptPage(tenant, token) {
+  const shop = escapeHtml(tenant.config.branding.shopName);
+  return `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${shop} \u2014 join on WhatsApp</title>
+<style>
+body{font-family:system-ui,sans-serif;max-width:420px;margin:60px auto;padding:0 20px;color:#2a2420}
+h1{font-size:1.3rem}
+input{width:100%;padding:12px;font-size:1rem;border:1px solid #ccc;border-radius:8px;margin:12px 0;box-sizing:border-box}
+button{width:100%;padding:12px;font-size:1rem;border:none;border-radius:8px;background:#25D366;color:#fff;font-weight:600}
+</style></head><body>
+<h1>${shop}</h1>
+<p>What's your name? We'll use it to greet you on WhatsApp.</p>
+<form method="get" action="/q/${encodeURIComponent(token)}">
+  <input name="name" placeholder="Your name" required maxlength="80" autofocus>
+  <button type="submit">Continue to WhatsApp</button>
+</form>
+</body></html>`;
 }
 function qrOrderView(req, tenant, qr) {
   const base = publicBaseUrl(req);
@@ -9355,7 +9438,9 @@ function qrOrderView(req, tenant, qr) {
     ...qr,
     claimUrl: `${base}/q/${qr.token}`,
     qrSvgUrl: `${base}/q/${qr.token}/qr.svg`,
-    waLink: waLink(tenant, qr.token)
+    // Real customers go through claimUrl (the name prompt), not this one —
+    // this is just an informational preview for the dashboard.
+    waLink: waLink(tenant, qr.token, "there")
   };
 }
 qrOrdersRouter.post("/qr-orders", async (req, res) => {
@@ -9399,7 +9484,12 @@ qrPublicRouter.get("/:token", async (req, res) => {
     res.status(404).send("This QR code is not valid.");
     return;
   }
-  res.redirect(302, waLink(tenant, qr.token));
+  const name = String(req.query.name ?? "").trim();
+  if (!name) {
+    res.type("html").send(namePromptPage(tenant, qr.token));
+    return;
+  }
+  res.redirect(302, waLink(tenant, qr.token, name));
 });
 qrPublicRouter.get("/:token/qr.svg", async (req, res) => {
   const qr = await getQrOrderByToken(String(req.params.token).toUpperCase());

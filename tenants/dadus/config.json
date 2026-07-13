@@ -41,7 +41,7 @@
   },
   "qrCapture": {
     "enabled": true,
-    "messageTemplate": "Namaste Dadu's! Adding my order {{token}} to my rewards ✨"
+    "messageTemplate": "Namaste Dadu's! This is {{name}}, adding my order {{token}} to my rewards ✨"
   },
   "brandVoice": {
     "tone": "warm, familial, like a trusted neighbourhood halwai; light Hindi-English mix",

@@ -5,9 +5,17 @@
 // (with a line to say out loud), and their loyalty points. Award or redeem
 // points and send a personal WhatsApp note from the same screen.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import AppShell from "../../components/AppShell";
 import { api } from "../../lib/api";
+
+interface MenuItem {
+  id: string;
+  name: string;
+  category: string;
+  price: number;
+  available: boolean;
+}
 
 interface CounterCard {
   profileId: string;
@@ -62,11 +70,28 @@ export default function CounterPage() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState("");
 
+  const [isNewCustomer, setIsNewCustomer] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
+  const [newItemQty, setNewItemQty] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    api<{ items: MenuItem[] }>("/menu")
+      .then((r) => setMenuItems(r.items.filter((it) => it.available)))
+      .catch(() => setMenuItems([]));
+  }, []);
+
+  const newSelectedItems = menuItems
+    .filter((it) => (newItemQty[it.id] ?? 0) > 0)
+    .map((it) => ({ name: it.name, category: it.category, qty: newItemQty[it.id], unitPrice: it.price }));
+  const newSelectedTotal = newSelectedItems.reduce((sum, it) => sum + it.qty * it.unitPrice, 0);
+
   async function lookup(refresh = false) {
     if (!phone.trim()) return;
     setLoading(true);
     setError("");
     setNotice("");
+    setIsNewCustomer(false);
     if (!refresh) {
       setCard(null);
       setLedger([]);
@@ -80,6 +105,13 @@ export default function CounterPage() {
       setLedger(r.ledger);
       setRecentMessages(r.recentMessages);
     } catch (e) {
+      if (e instanceof Error && (e as Error & { status?: number }).status === 404) {
+        setIsNewCustomer(true);
+        setNewName("");
+        setNewItemQty({});
+        setLoading(false);
+        return;
+      }
       setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
@@ -129,6 +161,25 @@ export default function CounterPage() {
     }
   }
 
+  async function createNewCustomer() {
+    if (!newName.trim()) return;
+    setBusy("new-customer");
+    setError("");
+    try {
+      await api("/counter/new-customer", {
+        method: "POST",
+        body: JSON.stringify({ phone: phone.trim(), name: newName.trim(), items: newSelectedItems }),
+      });
+      setIsNewCustomer(false);
+      setNotice(`Added ${newName.trim()} to your customers.`);
+      lookup(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy("");
+    }
+  }
+
   return (
     <AppShell>
       <div className="page-title">At the Counter</div>
@@ -158,6 +209,69 @@ export default function CounterPage() {
         {error && <div className="error-text" style={{ marginTop: 10 }}>{error}</div>}
         {notice && <div className="good-text" style={{ marginTop: 10 }}>{notice}</div>}
       </div>
+
+      {isNewCustomer && (
+        <div className="card" style={{ marginBottom: 20 }}>
+          <div className="section-title">New customer — {phone.trim()}</div>
+          <div className="muted" style={{ marginBottom: 14 }}>
+            No one's bought from you with this number yet. Add their name (and today's order, if
+            they're buying) to create their profile.
+          </div>
+          <input
+            type="text"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder="Customer name"
+            style={{ maxWidth: 280, marginBottom: 14 }}
+          />
+          {menuItems.length > 0 && (
+            <div style={{ marginBottom: 14 }}>
+              <div className="muted" style={{ marginBottom: 6 }}>
+                Today's order (optional — ₹{newSelectedTotal} so far)
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 8,
+                  maxHeight: 160,
+                  overflowY: "auto",
+                  border: "1px solid var(--border, #e2e2e2)",
+                  borderRadius: 8,
+                  padding: 10,
+                }}
+              >
+                {menuItems.map((it) => (
+                  <div
+                    key={it.id}
+                    style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", border: "1px solid var(--border, #e2e2e2)", borderRadius: 6 }}
+                  >
+                    <span style={{ fontSize: "0.85rem" }}>
+                      {it.name} <span className="muted">₹{it.price}</span>
+                    </span>
+                    <input
+                      type="number"
+                      min={0}
+                      value={newItemQty[it.id] ?? 0}
+                      onChange={(e) =>
+                        setNewItemQty((prev) => ({ ...prev, [it.id]: Math.max(0, Number(e.target.value)) }))
+                      }
+                      style={{ width: 50 }}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          <button
+            className="btn btn-primary"
+            disabled={busy === "new-customer" || !newName.trim()}
+            onClick={createNewCustomer}
+          >
+            {busy === "new-customer" ? "Adding…" : "Add customer"}
+          </button>
+        </div>
+      )}
 
       {card && (
         <>

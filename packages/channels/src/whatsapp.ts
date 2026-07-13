@@ -41,6 +41,13 @@ import { sendQrWelcome } from "./receipt.js";
 
 const GRAPH_API_BASE = "https://graph.facebook.com/v20.0";
 
+// Matches the name the QR claim page (apps/api/src/routes/qr-orders.ts)
+// asks for and weaves into the pre-drafted message — e.g. "This is Priya,
+// adding my order Q-XXXX...". Read from the message text itself rather than
+// only trusting WhatsApp's account-level contact name, which many people
+// never set to anything meaningful.
+const NAME_FROM_MESSAGE_RE = /this is\s+([^,]{1,80}),\s*adding my order/i;
+
 function mode(): "stub" | "live" {
   return process.env.WHATSAPP_MODE === "live" ? "live" : "stub";
 }
@@ -178,7 +185,14 @@ export async function handleWhatsAppInboundWebhook(
         const text: string = msg?.text?.body ?? "";
         if (!phone) continue;
 
-        const profile = await upsertProfile(tenantId, phone, {});
+        // Prefer the name the customer typed on the QR claim page (baked
+        // into the message text) since it's always present and always
+        // accurate; fall back to WhatsApp's own account-level contact name,
+        // which many people never set to anything meaningful.
+        const nameFromText = text.match(NAME_FROM_MESSAGE_RE)?.[1]?.trim();
+        const contact = (change?.value?.contacts ?? []).find((c: any) => c?.wa_id === msg?.from);
+        const name = nameFromText || contact?.profile?.name;
+        const profile = await upsertProfile(tenantId, phone, name ? { name } : {});
         await insertEvent(tenantId, profile.id, {
           eventType: "message_reply",
           items: [],

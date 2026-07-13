@@ -125,9 +125,14 @@ graph TD
   welcome + optional coupon. Printable SVG at `GET /q/:token/qr.svg`. Config:
   `qrCapture.{enabled,messageTemplate}` in tenant config (template must keep `{{token}}`).
   The dashboard's QR desk (/data) lets the shop pick real items from its own `menu-catalog`
-  (qty picker, auto-fills the amount from menu prices, still manually overridable) instead of
-  free-typing an amount only — `items` travels with the order and lands on the purchase record
-  once claimed.
+  (qty picker computes the amount — not manually editable) instead of free-typing an amount —
+  `items` travels with the order and lands on the purchase record once claimed. The public
+  `GET /q/:token` claim page asks the customer's name before redirecting into WhatsApp
+  (`namePromptPage`), weaving it into the pre-drafted message text in a fixed phrasing
+  ("This is {{name}}, adding my order..."); the inbound webhook parses it back out via
+  `NAME_FROM_MESSAGE_RE`, falling back to WhatsApp's own `contacts[].profile.name` if the
+  customer edited the message — this is deliberately not dependent on the WhatsApp account
+  having a display name set, which many don't.
   *Files:* `apps/api/src/routes/qr-orders.ts`, claim handling in
   `packages/channels/src/whatsapp.ts`, repos in `packages/db/src/repos-engage.ts`,
   dashboard picker in `apps/dashboard/app/data/page.tsx`.
@@ -221,7 +226,10 @@ graph TD
 
 - **`whatsapp-webhooks`** — Per-tenant-slug webhook endpoints (Meta verify handshake,
   delivery receipts, inbound replies, STOP opt-outs, redemption codes typed back, coupon
-  codes redeemed, QR-order tokens claimed).
+  codes redeemed, QR-order tokens claimed). Every inbound message carries the customer's
+  WhatsApp profile name in `contacts[].profile.name` alongside `messages[]` — the inbound
+  handler matches it by `wa_id` and merges it into the profile's traits on upsert, so a QR
+  claim or any reply captures a name, not just a phone number.
   *Files:* `apps/api/src/routes/webhooks.ts`, handlers in `packages/channels/src/whatsapp.ts`.
   *Depends on:* `phone-normalization`, `coupon-engine`, `db-layer`. *Used by:* `attribution`,
   `email-fallback` (delivery status), `qr-order-capture` (claim entry point).
@@ -261,8 +269,12 @@ graph TD
   always inside Meta's 24h service window since the customer just messaged). Recorded in
   `transactional_messages` — never in campaign messages or `direct_messages`, keeping
   attribution, hold-outs, and the owner's 1:1 history clean. Config
-  `receipts.{enabled,showItems,footerNote}`; stub/live like the other WhatsApp senders
-  (`TODO(whatsapp-live)`: utility templates).
+  `receipts.{enabled,showItems,footerNote}`. In `WHATSAPP_MODE=live`, `sendTransactionalWhatsApp`
+  sends real free-form text via the Graph API (`POST /{phone_number_id}/messages`, no template
+  needed since it's always inside the 24h service window) — the recorded `status` reflects
+  whether that live send actually succeeded, not just the opt-out check. A receipt fired from a
+  bulk CSV import may fall outside that window; for production at real scale that path should
+  move to an approved Meta "utility" template — free-form is fine for a live demo.
   *Files:* `packages/channels/src/receipt.ts`, wiring in `apps/api/src/routes/ingest.ts`.
   *Depends on:* `ingestion`, `loyalty-points`, `coupon-engine`, `db-layer`.
   *Used by:* `qr-order-capture` (welcome).
@@ -310,11 +322,16 @@ graph TD
 - **`counter-card`** — Everything a cashier needs on phone lookup: identity, loyalty balance,
   ranked suggestions, pitch line. Dashboard `/loyalty` page (session) and POS-facing
   `GET /v1/counter?phone=` (API key) serve the same card. Award/redeem + 1:1 note from the
-  same screen.
+  same screen. On a 404 (`"no customer with that number yet"` — surfaced to the dashboard via
+  a `status` property the shared `api()` client now attaches to thrown errors), the page shows
+  a "new customer" form instead of a bare error: name + optional menu-item picker, posting to
+  `POST /v1/app/counter/new-customer`, which creates the profile and (if items were picked)
+  records the first purchase through `ingestNormalizedEvents` — the same path CSV/QR use, so
+  loyalty points and opt-in behave identically regardless of entry point.
   *Files:* `packages/jobs/src/counter-card.ts`, `apps/api/src/routes/counter.ts`,
-  `apps/dashboard/app/loyalty/page.tsx`.
+  `apps/dashboard/app/loyalty/page.tsx`, `apps/dashboard/lib/api.ts`.
   *Depends on:* `counter-recommendations`, `ai-counter-pitch`, `loyalty-points`,
-  `phone-normalization`, `direct-messages`, `auth`.
+  `phone-normalization`, `direct-messages`, `auth`, `ingestion`, `menu-catalog` (item picker).
 
 - **`loyalty-points`** — Deterministic points math over an append-only ledger; earn happens
   inside ingestion (both paths) so points never drift from events. Backfilled from history
@@ -339,9 +356,21 @@ graph TD
   app (insights, campaigns, attribution, preferences, settings, settings/engagement),
   segments, counter, menu, qr-orders, plus the public unauthenticated `GET /q/:token`
   claim redirect + `/q/:token/qr.svg` (the unguessable token is the credential).
-  *Files:* `apps/api/src/app.ts`, `index.ts`, `apps/api/api/index.ts`, `apps/api/src/routes/*`,
-  `apps/api/vercel.json`.
+  *Files:* `apps/api/src/app.ts`, `index.ts`, `apps/api/api-src/index.ts` + `cron/*.ts`,
+  `apps/api/src/routes/*`, `apps/api/vercel.json`.
   *Depends on:* `auth`, all route-backing nodes.
+
+  **⚠️ Deploy gotcha:** `apps/api/api/*.js` (the actual Vercel serverless functions — `index.js`,
+  `cron/nightly.js`, `cron/maintenance.js`) are esbuild-bundled output, **committed to git**, and
+  Vercel's configured Install Command (`pnpm install && pnpm build:packages`) does **not**
+  regenerate them — that only rebuilds `packages/*/dist`. Editing `apps/api/src/**` or any
+  `packages/*/src` file and deploying without an explicit rebuild silently ships a **stale
+  bundle** (no error, no warning — it just runs old code). Before every deploy of `hpas-api`
+  after any source change: `pnpm build:packages && (cd apps/api && node
+  scripts/build-vercel-functions.mjs)`, confirm the new code landed (e.g. `grep` the target
+  function/string in `apps/api/api/index.js`), *then* `vercel deploy --prod`. This bit an entire
+  debugging session (2026-07-13/14) where a real bug fix in `whatsapp.ts` appeared to keep
+  failing across multiple "successful" redeploys — it was never actually live.
 
 - **`worker-app`** — Persistent `node-cron` scheduler (persistent-host deploys only) + CLIs:
   `run-job` (any of the 4 jobs by name), `seed`, `smoke`.
