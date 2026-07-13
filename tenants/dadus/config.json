@@ -78,7 +78,7 @@
     "locationId": "Store Code"
   },
   "channels": {
-    "whatsapp": { "enabled": true, "number": "+911140401234" },
+    "whatsapp": { "enabled": true, "number": "+15551405638" },
     "email": { "enabled": true, "fromAddress": "hello@dadus.example" },
     "callList": { "enabled": true, "minLtvThreshold": 5000 }
   }

@@ -54,14 +54,12 @@ export default function DataPage() {
 
   const [qrOrders, setQrOrders] = useState<QrOrderRow[] | null>(null);
   const [qrRef, setQrRef] = useState("");
-  const [qrAmount, setQrAmount] = useState("");
   const [qrSource, setQrSource] = useState("swiggy");
   const [qrBusy, setQrBusy] = useState(false);
   const [qrError, setQrError] = useState("");
   const [copiedId, setCopiedId] = useState("");
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [qrItemQty, setQrItemQty] = useState<Record<string, number>>({});
-  const [amountTouched, setAmountTouched] = useState(false);
 
   const load = useCallback(() => {
     api<{ uploads: Upload[] }>("/uploads")
@@ -86,14 +84,6 @@ export default function DataPage() {
     setQrItemQty((prev) => ({ ...prev, [id]: Math.max(0, qty) }));
   }
 
-  // Keep the amount in sync with the picked items unless the shop owner has
-  // manually overridden it (aggregator payout can differ from menu price).
-  useEffect(() => {
-    if (!amountTouched && selectedItems.length > 0) {
-      setQrAmount(String(selectedTotal));
-    }
-  }, [selectedTotal, selectedItems.length, amountTouched]);
-
   async function createQr() {
     setQrBusy(true);
     setQrError("");
@@ -102,15 +92,13 @@ export default function DataPage() {
         method: "POST",
         body: JSON.stringify({
           order_ref: qrRef.trim(),
-          amount: Number(qrAmount),
+          amount: selectedTotal,
           source: qrSource,
           items: selectedItems,
         }),
       });
       setQrRef("");
-      setQrAmount("");
       setQrItemQty({});
-      setAmountTouched(false);
       load();
     } catch (e) {
       setQrError(e instanceof Error ? e.message : String(e));
@@ -175,10 +163,16 @@ export default function DataPage() {
           when the customer scans it, WhatsApp opens with a ready message to you, and the moment
           they hit send, they (and their order) join your customer list.
         </div>
+        {menuItems.length === 0 && (
+          <div className="notice" style={{ marginBottom: 14 }}>
+            Add items to your <a href="/menu">menu</a> first — the QR amount is calculated from
+            the items you pick, so there's nothing to select yet.
+          </div>
+        )}
         {menuItems.length > 0 && (
           <div style={{ marginBottom: 14 }}>
             <div className="muted" style={{ marginBottom: 6 }}>
-              What did they buy? (optional — fills the amount below automatically)
+              What did they buy? (the amount below is calculated from your picks)
             </div>
             <div
               style={{
@@ -219,17 +213,9 @@ export default function DataPage() {
             onChange={(e) => setQrRef(e.target.value)}
             style={{ width: 200 }}
           />
-          <input
-            type="number"
-            placeholder="Amount ₹"
-            min={0}
-            value={qrAmount}
-            onChange={(e) => {
-              setAmountTouched(true);
-              setQrAmount(e.target.value);
-            }}
-            style={{ width: 120 }}
-          />
+          <div className="muted" style={{ width: 120 }}>
+            Amount: <strong>₹{selectedTotal}</strong>
+          </div>
           <select value={qrSource} onChange={(e) => setQrSource(e.target.value)}>
             <option value="swiggy">Swiggy</option>
             <option value="zomato">Zomato</option>
@@ -238,7 +224,7 @@ export default function DataPage() {
           </select>
           <button
             className="btn btn-primary"
-            disabled={qrBusy || !qrRef.trim() || !(Number(qrAmount) >= 0 && qrAmount !== "")}
+            disabled={qrBusy || !qrRef.trim() || selectedItems.length === 0}
             onClick={createQr}
           >
             Create QR
