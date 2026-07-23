@@ -10,6 +10,8 @@ import type {
   CopyResult,
   DiscoverSegmentsRequest,
   PitchRequest,
+  PricingRationaleRequest,
+  PricingRationaleResult,
   SegmentProposal,
 } from "./provider.js";
 
@@ -135,6 +137,19 @@ export class MockCopyProvider implements CopyProvider {
       c.loyaltyBalance >= 100 ? `You have ${c.loyaltyBalance} points saved up, by the way.` : "",
     ].filter(Boolean);
     return bits.slice(0, 3).join(" ");
+  }
+
+  async writePricingRationale(req: PricingRationaleRequest): Promise<PricingRationaleResult[]> {
+    return req.items.map((it) => {
+      const occasionBit = req.occasion ? ` ahead of ${req.occasion}` : "";
+      const rationale =
+        it.demandTrend === "rising"
+          ? `Selling more than usual lately${occasionBit} — a small increase captures demand without denting volume.`
+          : it.demandTrend === "falling"
+            ? `Sales have cooled off — a small cut can bring customers back.`
+            : `Steady sales${occasionBit} — price left close to where it is.`;
+      return { menuItemId: it.menuItemId, rationale };
+    });
   }
 }
 

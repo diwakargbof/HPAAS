@@ -6438,6 +6438,18 @@ var AnthropicCopyProvider = class {
     ].filter(Boolean).join("\n"));
     return text.trim();
   }
+  async writePricingRationale(req) {
+    const text = await this.ask([
+      `You explain price-change recommendations for "${req.shopName}", a small Indian retail shop, to its owner.`,
+      `For each item below, write ONE short reason (max 140 chars, plain language, no jargon) the owner can read before deciding whether to apply it.`,
+      req.occasion ? `These recommendations are timed for the upcoming ${req.occasion}.` : "",
+      `Reply with JSON ONLY: an array of {"menuItemId", "rationale"}, one per item, same order as given.`
+    ].filter(Boolean).join("\n"), req.items.map((it) => `- ${it.menuItemId}: "${it.name}", \u20B9${it.currentPrice} \u2192 \u20B9${it.suggestedPrice} (demand ${it.demandTrend})`).join("\n"));
+    const parsed = parseJson(text);
+    if (!Array.isArray(parsed))
+      throw new Error("expected an array of pricing rationales");
+    return parsed;
+  }
   /** One system+user round trip, text back. */
   async ask(system, user) {
     const response = await this.client.messages.create({
@@ -6572,6 +6584,13 @@ var MockCopyProvider = class {
       c.loyaltyBalance >= 100 ? `You have ${c.loyaltyBalance} points saved up, by the way.` : ""
     ].filter(Boolean);
     return bits.slice(0, 3).join(" ");
+  }
+  async writePricingRationale(req) {
+    return req.items.map((it) => {
+      const occasionBit = req.occasion ? ` ahead of ${req.occasion}` : "";
+      const rationale = it.demandTrend === "rising" ? `Selling more than usual lately${occasionBit} \u2014 a small increase captures demand without denting volume.` : it.demandTrend === "falling" ? `Sales have cooled off \u2014 a small cut can bring customers back.` : `Steady sales${occasionBit} \u2014 price left close to where it is.`;
+      return { menuItemId: it.menuItemId, rationale };
+    });
   }
 };
 function capitalize(s) {

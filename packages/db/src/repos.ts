@@ -361,6 +361,52 @@ export async function topProfilesByLtv(
   return rows.map((r) => ({ ...mapFeatures(r), phone: r.phone, traits: r.traits }));
 }
 
+export type CustomerSort = "recent" | "ltv" | "purchases" | "alphabetical";
+
+const CUSTOMER_ORDER_BY: Record<CustomerSort, string> = {
+  recent: "p.created_at DESC",
+  ltv: "f.monetary_ltv DESC NULLS LAST, p.created_at DESC",
+  purchases: "f.frequency_90d DESC NULLS LAST, p.created_at DESC",
+  alphabetical: "lower(p.traits->>'name') ASC NULLS LAST, p.phone ASC",
+};
+
+/** Every customer (not just the top-N), searchable by name/phone, sortable a few ways. */
+export async function listCustomers(
+  tenantId: string,
+  opts: { search?: string; sort?: CustomerSort; limit?: number } = {}
+): Promise<
+  Array<
+    Profile & {
+      ltv: number | null;
+      purchases90d: number | null;
+      recencyDays: number | null;
+      favoriteItem: string | null;
+    }
+  >
+> {
+  const search = opts.search?.trim() || null;
+  const limit = opts.limit ?? 500;
+  const orderBy = CUSTOMER_ORDER_BY[opts.sort ?? "recent"];
+
+  const rows = await query(
+    `SELECT p.*, f.monetary_ltv, f.frequency_90d, f.recency_days, f.favorite_item
+     FROM profiles p
+     LEFT JOIN features f ON f.profile_id = p.id AND f.tenant_id = p.tenant_id
+     WHERE p.tenant_id = $1
+       AND ($2::text IS NULL OR p.phone ILIKE '%' || $2 || '%' OR (p.traits->>'name') ILIKE '%' || $2 || '%')
+     ORDER BY ${orderBy}
+     LIMIT $3`,
+    [tenantId, search, limit]
+  );
+  return rows.map((r) => ({
+    ...mapProfile(r),
+    ltv: r.monetary_ltv !== null ? Number(r.monetary_ltv) : null,
+    purchases90d: r.frequency_90d,
+    recencyDays: r.recency_days,
+    favoriteItem: r.favorite_item,
+  }));
+}
+
 // ---------- segments ----------
 
 export async function upsertSegment(

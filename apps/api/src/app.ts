@@ -15,6 +15,7 @@ import { counterRouter } from "./routes/counter.js";
 import { menuRouter } from "./routes/menu.js";
 import { qrOrdersRouter, qrPublicRouter } from "./routes/qr-orders.js";
 import { billingRouter, invoicesPublicRouter } from "./routes/billing.js";
+import { pricingRouter } from "./routes/pricing.js";
 
 export const app: express.Express = express();
 app.use(cors());
@@ -54,6 +55,7 @@ app.use("/v1/app", sessionAuth, counterRouter);
 app.use("/v1/app", sessionAuth, menuRouter);
 app.use("/v1/app", sessionAuth, qrOrdersRouter);
 app.use("/v1/app", sessionAuth, billingRouter);
+app.use("/v1/app", sessionAuth, pricingRouter);
 
 // Machine API (API-key auth): streaming events, uploads, POS redemptions,
 // the counter card (so billing software can show it at checkout and

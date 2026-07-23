@@ -355,21 +355,34 @@ graph TD
   `gst-billing` (per-item tax rate/HSN).
 
 - **`gst-billing`** — Tenant-invoked GST tax invoice generation. The tenant fills in their own
-  business/GST details once (`Settings → Billing`, `GET/PUT /v1/app/settings/billing`, stored
-  as `tenants.config->billingProfile` — mirrors the `settings/engagement` pattern exactly:
-  `patchTenantConfig` shallow-merge, `billingProfileConfig()` default accessor). From the
+  business/GST details once (`Settings → Billing`, linked from the `/settings` hub page,
+  `GET/PUT /v1/app/settings/billing`, stored as `tenants.config->billingProfile` — mirrors
+  the `settings/engagement` pattern exactly: `patchTenantConfig` shallow-merge,
+  `billingProfileConfig()` default accessor). From the
   `/billing` page, picking items + a phone number and hitting Generate (`POST
   /v1/app/invoices`) looks up/creates the customer profile, resolves each line's GST
   rate/HSN (menu item → tenant default → 0) via `computeInvoiceLines`
   (`packages/core/src/gst.ts`), and atomically claims the next sequential per-tenant invoice
   number (`invoice_counters` table, one UPDATE...RETURNING, no racy `COUNT(*)+1`). The
   invoice snapshots its line items/tax breakup at creation time — later menu-price or
-  GST-rate edits never change a past invoice. Delivered three ways: a public printable HTML
+  GST-rate edits never change a past invoice. It also calls `ingestNormalizedEvents` (the
+  same path CSV/QR/Counter purchases use) with the post-discount taxable amount, so a billed
+  sale counts as a real purchase — it feeds `feature-computation` (LTV, frequency,
+  segments) and earns loyalty points, exactly like every other entry point. Delivered three ways: a public printable HTML
   page at `GET /i/:token` (same unguessable-token-is-the-credential pattern as the QR claim
   page, mounted in `app.ts` right alongside `/q`), a WhatsApp message via
   `sendTransactionalWhatsApp` (kind `"invoice"`) with a link, and — when the profile has an
   email trait — `sendInvoiceEmail` (a generic Resend send, distinct from the
   campaign-fallback-only `sendViaEmail`).
+  **Optional discount**: the Billing page can apply a familiar-customer/employee discount
+  (percent or flat) to an invoice before generating it — `applyInvoiceDiscount`
+  (`packages/core/src/gst.ts`) scales every line's taxable value/tax down proportionally so
+  the CGST/SGST breakup stays correct on the discounted price, rather than knocking the
+  discount off the final total. Whenever a discount's value is > 0, the authorizing
+  employee's name + ID are mandatory (validated both client-side and in `POST /invoices`) —
+  no anonymous discounting. Stored on the invoice row (`discount_type`, `discount_value`,
+  `discount_amount`, `authorized_by_name`, `authorized_by_id`, migration
+  `006_invoice_discounts.sql`) and shown on the printable invoice.
   **Deliberate scope limits** (see the migration's header comment for the full list):
   intra-state supply only (CGST+SGST split, no IGST/place-of-supply — this product has no
   notion of a customer's billing state, being a physical-counter/QR-pickup flow, not shipped
@@ -378,12 +391,64 @@ graph TD
   financial-year reset.
   *Files:* `packages/core/src/gst.ts`, `packages/db/src/repos-billing.ts`,
   `apps/api/src/routes/billing.ts`, `apps/dashboard/app/settings/billing/page.tsx`,
-  `apps/dashboard/app/billing/page.tsx`, migration `005_gst_billing.sql`.
+  `apps/dashboard/app/billing/page.tsx`, migrations `005_gst_billing.sql`,
+  `006_invoice_discounts.sql`.
   *Depends on:* `menu-catalog` (tax rate/HSN per item), `phone-normalization`,
   `whatsapp-adapter`, `email-adapter`, `db-layer`.
   *Not wired in yet (deliberately out of v1 scope):* auto-generating an invoice from the
   Counter's `/counter/new-customer` flow or the QR-claim flow — this is a standalone,
   tenant-invoked action for now, matching "filled by tenant himself."
+
+- **`ai-pricing`** — Optional, admin-gated add-on: bounded, explainable price-change
+  recommendations per menu item, from the tenant's own sales history. Gating is the same
+  `modules.pricing.enabled` mechanism used for every other module (an admin-set flag —
+  turned on for a tenant once they've paid you outside the app; **no in-app payment
+  collection exists**), enforced both by nav visibility and a 403 check at the top of every
+  route in `apps/api/src/routes/pricing.ts`. The tenant opts items in one at a time or
+  "optimize all" (`Settings` section of the `/pricing` page), with per-item min/max price
+  and max %-change bounds (falling back to a tenant-wide default), plus an optional
+  occasion tied to a configured festival. Hitting "Refresh recommendations" (never a
+  background cron — tenant-triggered only, each refresh costs one AI call) runs
+  `refreshPricingRecommendations` (`packages/jobs/src/pricing.ts`, mirrors
+  `counter-card.ts`'s pattern: deterministic core computation + one cached AI call, called
+  directly from the API route): pulls each target item's 90-day vs prior-90-day units sold
+  (`tenantItemSalesByName`, `packages/db/src/repos-pricing.ts`, matched to menu items by
+  name in JS — events store item name/qty in JSONB, not a menu_item_id FK), computes a
+  bounded suggestion via `computePriceRecommendation` (`packages/core/src/pricing.ts` —
+  rising/falling 90-day demand nudges price up/down, magnitude always clamped to the
+  configured bounds; a small extra nudge when the item's category matches an active
+  festival window via `activeFestivalWindow`), then makes one **batched** AI call
+  (`generatePricingRationale`, the 5th `@hpas/ai` call site, added the same way as the
+  other four — `provider.ts` interface + both implementations + validated wrapper) for a
+  short plain-language reason per item; any item the model skips falls back to a
+  deterministic rationale built from its demand trend, so correctness never depends on the
+  AI call. Recommendations are cached (`price_recommendations` table, one row per item,
+  upserted on refresh) and **never applied automatically** — the tenant applies one or all
+  via `POST /pricing/apply`, which writes the suggested price onto `menu_items.price`, the
+  same "nothing happens without approval" invariant already enforced for campaigns.
+  **Deliberate scope limit**: this is a bounded demand-trend heuristic, not an econometric
+  price-elasticity model — a small shop's transaction volume can't support one.
+  *Files:* `packages/core/src/pricing.ts`, `packages/ai/src/{provider,anthropic-provider,mock-provider,index}.ts`,
+  `packages/db/src/repos-pricing.ts`, `packages/jobs/src/pricing.ts`,
+  `apps/api/src/routes/pricing.ts`, `apps/dashboard/app/pricing/{page,locked}.tsx`
+  (Recommendations) + `apps/dashboard/app/pricing/settings/page.tsx` (Item Settings),
+  migration `007_pricing.sql`.
+  *Depends on:* `menu-catalog` (items + prices), `ingestion` (events.items sales history),
+  `db-layer`. *Used by:* `dashboard-app`.
+  *Not enabled anywhere yet:* deliberately absent from `tenants/dadus/config.json` and
+  `tenants/_template/config.json` — stays invisible until you explicitly add
+  `"pricing": { "enabled": true, "order": N }` to a paying tenant's config.
+
+- **`customer-directory`** — The full customer list (My Customers/`insights` only ever shows
+  the top 8 by lifetime spend). `/customers` page: searchable by name/phone, sortable by
+  recency, lifetime spend, 90-day purchase count, or alphabetical — backed by
+  `listCustomers` (`packages/db/src/repos.ts`, a whitelisted sort-column map + `ILIKE` search,
+  `profiles LEFT JOIN features` so customers without computed features yet still show up)
+  and `GET /v1/app/customers?search=&sort=`. Linked from the My Customers page
+  ("View all customers →") and its own nav item.
+  *Files:* `packages/db/src/repos.ts` (`listCustomers`), `apps/api/src/routes/app.ts`
+  (`GET /customers`), `apps/dashboard/app/customers/page.tsx`.
+  *Depends on:* `feature-computation` (spend/frequency columns), `db-layer`.
 
 ## 8. Apps & operations
 
@@ -426,12 +491,19 @@ graph TD
   *Files:* `apps/api/api/cron/nightly.ts`, `maintenance.ts`, `_auth.ts`.
   *Depends on:* `scheduled-jobs`, `auth`.
 
-- **`dashboard-app`** — Next.js shop-owner app (:3000), tenant-themed. Pages: `/` +
-  `/insights` (customer picture + impact ← `attribution`), `/campaigns` (approval queue),
-  `/segments` (standard + AI authoring/discovery), `/loyalty` (Counter), `/menu`,
-  `/data` (uploads + online-order QR desk ← `qr-order-capture`), `/preferences` (toggles +
-  frequency cap + receipt/coupon rules ← `coupon-engine`, `order-receipts`), `/settings`
-  (WhatsApp status, branding, API key).
+- **`dashboard-app`** — Next.js shop-owner app (:3000), tenant-themed. Sidebar nav has two
+  collapsible groups (`AppShell.tsx`'s `renderGroup`) alongside flat top-level links —
+  **Personalization** (`/insights`, `/customers`, `/segments`, `/campaigns`, `/loyalty` —
+  each still only shown when its own module is enabled) and **Pricing**
+  (`/pricing` Recommendations + `/pricing/settings` Item Settings — the group itself is
+  always shown, locked (🔒) when `modules.pricing` isn't enabled, so it reads as an upsell
+  rather than being invisible; see `ai-pricing`). Flat items: `/menu`, `/data` (uploads +
+  online-order QR desk ← `qr-order-capture`), `/preferences` (toggles + frequency cap +
+  receipt/coupon rules ← `coupon-engine`, `order-receipts`), `/settings` (WhatsApp status,
+  branding, API key, links to `/settings/billing`), `/billing` (Generate Bill ←
+  `gst-billing`). `/insights` (customer picture + impact ← `attribution`), `/customers`
+  (full searchable/sortable directory ← `customer-directory`), `/segments` (standard + AI
+  authoring/discovery).
   *Files:* `apps/dashboard/app/*/page.tsx`, `components/AppShell.tsx`, `lib/api.ts`.
   *Depends on:* `api-app` (via `lib/api.ts`), `auth`.
 

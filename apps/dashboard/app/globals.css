@@ -92,6 +92,46 @@ a {
   color: #fff;
 }
 
+.nav-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-radius: 10px;
+  color: var(--ink-secondary);
+  font-weight: 650;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  cursor: pointer;
+  user-select: none;
+}
+
+.nav-group-header:hover {
+  background: var(--bg);
+}
+
+.nav-chevron {
+  font-size: 0.8rem;
+  transition: transform 0.15s;
+}
+
+.nav-chevron.open {
+  transform: rotate(90deg);
+}
+
+.nav-group-children {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0 6px 10px;
+}
+
+.nav-group-children .nav-link {
+  font-size: 0.92rem;
+  padding: 8px 12px;
+}
+
 .sidebar .logout {
   margin-top: auto;
   color: var(--ink-muted);

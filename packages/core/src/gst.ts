@@ -5,7 +5,14 @@
 // from. See KNOWLEDGE_GRAPH.md for the full list of GST scope limits.
 
 import crypto from "node:crypto";
-import { billingProfileConfig, type EventItem, type InvoiceLineItem, type MenuItem, type Tenant } from "@hpas/types";
+import {
+  billingProfileConfig,
+  type EventItem,
+  type InvoiceDiscount,
+  type InvoiceLineItem,
+  type MenuItem,
+  type Tenant,
+} from "@hpas/types";
 
 /** Matches the unguessable-token pattern used by QR orders (generateQrToken). */
 export function generateInvoiceToken(): string {
@@ -51,4 +58,32 @@ export function computeInvoiceLines(
 
 export function menuItemsByName(items: Pick<MenuItem, "name" | "gstRate" | "hsnCode">[]): Map<string, TaxableMenuItem> {
   return new Map(items.map((it) => [it.name.toLowerCase(), it]));
+}
+
+/**
+ * Scales every line's taxable value (and its tax) down by the discount,
+ * proportionally, so the GST breakup stays correct on the discounted price
+ * rather than being knocked off the final total. Returns the discounted
+ * lines plus the flat rupee amount the discount worked out to.
+ */
+export function applyInvoiceDiscount(
+  lines: InvoiceLineItem[],
+  discount: Pick<InvoiceDiscount, "type" | "value">
+): { lines: InvoiceLineItem[]; discountAmount: number } {
+  const taxableAmount = lines.reduce((sum, l) => sum + l.taxableValue, 0);
+  const discountAmount =
+    discount.type === "percent"
+      ? (taxableAmount * Math.max(0, discount.value)) / 100
+      : Math.min(Math.max(0, discount.value), taxableAmount);
+  const factor = taxableAmount > 0 ? (taxableAmount - discountAmount) / taxableAmount : 1;
+
+  return {
+    discountAmount,
+    lines: lines.map((l) => {
+      const taxableValue = l.taxableValue * factor;
+      const cgst = (taxableValue * l.gstRate) / 200;
+      const sgst = cgst;
+      return { ...l, taxableValue, cgst, sgst, lineTotal: taxableValue + cgst + sgst };
+    }),
+  };
 }

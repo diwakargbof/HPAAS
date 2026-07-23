@@ -19,6 +19,7 @@ import {
   getSegment,
   getPreferences,
   listCampaigns,
+  listCustomers,
   listSegments,
   messagesForCampaign,
   monthlyRepeatRate,
@@ -93,6 +94,31 @@ appRouter.get("/insights", async (req, res) => {
       incrementalRevenue: Math.round(incrementalRevenue),
       redemptions: totalRedemptions,
     },
+  });
+});
+
+const CUSTOMER_SORTS = ["recent", "ltv", "purchases", "alphabetical"] as const;
+
+appRouter.get("/customers", async (req, res) => {
+  const tenant = req.tenant!;
+  const search = typeof req.query.search === "string" ? req.query.search : undefined;
+  const sortParam = String(req.query.sort ?? "recent");
+  const sort = (CUSTOMER_SORTS as readonly string[]).includes(sortParam)
+    ? (sortParam as (typeof CUSTOMER_SORTS)[number])
+    : "recent";
+
+  const customers = await listCustomers(tenant.id, { search, sort, limit: 500 });
+  res.json({
+    customers: customers.map((c) => ({
+      id: c.id,
+      name: typeof c.traits.name === "string" && c.traits.name ? c.traits.name : "Customer",
+      phone: c.phone,
+      ltv: c.ltv,
+      purchases90d: c.purchases90d,
+      recencyDays: c.recencyDays,
+      favoriteItem: c.favoriteItem,
+      joinedAt: c.createdAt,
+    })),
   });
 });
 

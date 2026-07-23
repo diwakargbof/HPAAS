@@ -9,6 +9,8 @@ import type {
   CopyResult,
   DiscoverSegmentsRequest,
   PitchRequest,
+  PricingRationaleRequest,
+  PricingRationaleResult,
   SegmentProposal,
 } from "./provider.js";
 
@@ -163,6 +165,28 @@ export class AnthropicCopyProvider implements CopyProvider {
         .join("\n")
     );
     return text.trim();
+  }
+
+  async writePricingRationale(req: PricingRationaleRequest): Promise<PricingRationaleResult[]> {
+    const text = await this.ask(
+      [
+        `You explain price-change recommendations for "${req.shopName}", a small Indian retail shop, to its owner.`,
+        `For each item below, write ONE short reason (max 140 chars, plain language, no jargon) the owner can read before deciding whether to apply it.`,
+        req.occasion ? `These recommendations are timed for the upcoming ${req.occasion}.` : "",
+        `Reply with JSON ONLY: an array of {"menuItemId", "rationale"}, one per item, same order as given.`,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      req.items
+        .map(
+          (it) =>
+            `- ${it.menuItemId}: "${it.name}", ₹${it.currentPrice} → ₹${it.suggestedPrice} (demand ${it.demandTrend})`
+        )
+        .join("\n")
+    );
+    const parsed = parseJson<PricingRationaleResult[]>(text);
+    if (!Array.isArray(parsed)) throw new Error("expected an array of pricing rationales");
+    return parsed;
   }
 
   /** One system+user round trip, text back. */

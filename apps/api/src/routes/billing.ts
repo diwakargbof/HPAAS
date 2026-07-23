@@ -5,7 +5,13 @@
 // the deliberate scope limits (intra-state only, no e-invoice IRN).
 
 import { Router } from "express";
-import { computeInvoiceLines, generateInvoiceToken, menuItemsByName } from "@hpas/core";
+import {
+  applyInvoiceDiscount,
+  computeInvoiceLines,
+  generateInvoiceToken,
+  ingestNormalizedEvents,
+  menuItemsByName,
+} from "@hpas/core";
 import { sendInvoiceEmail, sendTransactionalWhatsApp } from "@hpas/channels";
 import {
   billingProfileConfig,
@@ -109,9 +115,54 @@ billingRouter.post("/invoices", async (req, res) => {
     return;
   }
 
+  const discountBody = req.body?.discount;
+  let discountType: "percent" | "flat" | null = null;
+  let discountValue = 0;
+  let discountAmount = 0;
+  let authorizedByName: string | null = null;
+  let authorizedById: string | null = null;
+
+  if (discountBody && Number(discountBody.value) > 0) {
+    const type = discountBody.type === "flat" ? "flat" : "percent";
+    const value = Number(discountBody.value) || 0;
+    const employeeName = String(discountBody.authorizedByName ?? "").trim();
+    const employeeId = String(discountBody.authorizedById ?? "").trim();
+    if (!employeeName || !employeeId) {
+      res.status(400).json({
+        error: "Applying a discount requires the authorizing employee's name and ID",
+      });
+      return;
+    }
+    discountType = type;
+    discountValue = type === "percent" ? Math.min(100, value) : value;
+    authorizedByName = employeeName;
+    authorizedById = employeeId;
+  }
+
   const profile = await upsertProfile(tenant.id, phone, name ? { name } : {});
   const menuItems = await listMenuItems(tenant.id);
-  const lineItems = computeInvoiceLines(items, tenant, menuItemsByName(menuItems));
+  let lineItems = computeInvoiceLines(items, tenant, menuItemsByName(menuItems));
+
+  if (discountType) {
+    const discounted = applyInvoiceDiscount(lineItems, { type: discountType, value: discountValue });
+    lineItems = discounted.lines;
+    discountAmount = discounted.discountAmount;
+  }
+
+  // Same path as CSV/QR/Counter purchases: this is what feeds segments, LTV,
+  // and loyalty points — a bill generated here must count as a real purchase.
+  const taxableAmount = lineItems.reduce((sum, l) => sum + l.taxableValue, 0);
+  await ingestNormalizedEvents(tenant, [
+    {
+      tenantId: tenant.id,
+      phone,
+      traits: name ? { name } : {},
+      eventType: "purchase",
+      items,
+      amount: taxableAmount,
+      ts: new Date(),
+    },
+  ]);
 
   const invoice = await createInvoice({
     tenantId: tenant.id,
@@ -121,6 +172,11 @@ billingRouter.post("/invoices", async (req, res) => {
     customerName: name || profile.traits.name || null,
     customerPhone: phone,
     lineItems,
+    discountType,
+    discountValue,
+    discountAmount,
+    authorizedByName,
+    authorizedById,
   });
 
   const view = invoiceView(req, invoice);
@@ -212,10 +268,16 @@ th{text-align:left;background:#faf7f2}
   <tbody>${rows}</tbody>
 </table>
 <div class="totals">
+  ${invoice.discountAmount > 0 ? `<div>Discount (${invoice.discountType === "percent" ? `${invoice.discountValue}%` : `flat ₹${invoice.discountValue.toFixed(2)}`}): −₹${invoice.discountAmount.toFixed(2)}</div>` : ""}
   <div>Taxable amount: ₹${invoice.taxableAmount.toFixed(2)}</div>
   <div>CGST: ₹${invoice.cgstAmount.toFixed(2)} &nbsp; SGST: ₹${invoice.sgstAmount.toFixed(2)}</div>
   <div class="grand">Total: ₹${invoice.totalAmount.toFixed(2)}</div>
 </div>
+${
+  invoice.authorizedByName
+    ? `<div class="muted" style="margin-top:8px;font-size:0.85rem">Discount authorized by: ${escapeHtml(invoice.authorizedByName)} (ID: ${escapeHtml(invoice.authorizedById ?? "")})</div>`
+    : ""
+}
 <p class="muted" style="margin-top:30px;font-size:0.8rem">This is a GST tax invoice generated for intra-state supply. ${printUrl}</p>
 <button onclick="window.print()" style="padding:10px 16px;border-radius:8px;border:none;background:#2a2420;color:#fff;cursor:pointer">Print</button>
 </body></html>`;

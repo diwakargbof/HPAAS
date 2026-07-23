@@ -19,6 +19,11 @@ const mapInvoice = (r: any): Invoice => ({
   cgstAmount: Number(r.cgst_amount),
   sgstAmount: Number(r.sgst_amount),
   totalAmount: Number(r.total_amount),
+  discountType: r.discount_type,
+  discountValue: Number(r.discount_value ?? 0),
+  discountAmount: Number(r.discount_amount ?? 0),
+  authorizedByName: r.authorized_by_name,
+  authorizedById: r.authorized_by_id,
   status: r.status,
   createdAt: r.created_at,
 });
@@ -31,6 +36,11 @@ export async function createInvoice(i: {
   customerName?: string | null;
   customerPhone?: string | null;
   lineItems: InvoiceLineItem[];
+  discountType?: "percent" | "flat" | null;
+  discountValue?: number;
+  discountAmount?: number;
+  authorizedByName?: string | null;
+  authorizedById?: string | null;
 }): Promise<Invoice> {
   const taxableAmount = i.lineItems.reduce((sum, l) => sum + l.taxableValue, 0);
   const cgstAmount = i.lineItems.reduce((sum, l) => sum + l.cgst, 0);
@@ -54,8 +64,9 @@ export async function createInvoice(i: {
     const row = await client.query(
       `INSERT INTO invoices
          (tenant_id, token, invoice_number, profile_id, customer_name, customer_phone,
-          line_items, taxable_amount, cgst_amount, sgst_amount, total_amount)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          line_items, taxable_amount, cgst_amount, sgst_amount, total_amount,
+          discount_type, discount_value, discount_amount, authorized_by_name, authorized_by_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
        RETURNING *`,
       [
         i.tenantId,
@@ -69,6 +80,11 @@ export async function createInvoice(i: {
         cgstAmount,
         sgstAmount,
         totalAmount,
+        i.discountType ?? null,
+        i.discountValue ?? 0,
+        i.discountAmount ?? 0,
+        i.authorizedByName ?? null,
+        i.authorizedById ?? null,
       ]
     );
     return mapInvoice(row.rows[0]);

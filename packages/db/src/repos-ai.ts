@@ -88,6 +88,19 @@ export async function deleteMenuItem(tenantId: string, itemId: string): Promise<
   await query(`DELETE FROM menu_items WHERE tenant_id = $1 AND id = $2`, [tenantId, itemId]);
 }
 
+/** Applies an AI Pricing recommendation — never automatic, always tenant-invoked. */
+export async function updateMenuItemPrice(
+  tenantId: string,
+  itemId: string,
+  price: number
+): Promise<MenuItem | null> {
+  const row = await queryOne(
+    `UPDATE menu_items SET price = $3 WHERE tenant_id = $1 AND id = $2 RETURNING *`,
+    [tenantId, itemId, price]
+  );
+  return row ? mapMenuItem(row) : null;
+}
+
 /** Menu items added in the trailing window — "what's new" context for campaign copy. */
 export async function recentMenuItems(tenantId: string, days: number): Promise<MenuItem[]> {
   const rows = await query(

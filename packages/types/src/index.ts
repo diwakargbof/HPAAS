@@ -15,7 +15,9 @@ export type ModuleKey =
   | "preferences"
   | "data"
   | "settings"
-  | "billing";
+  | "billing"
+  | "customers"
+  | "pricing";
 
 export type CampaignType =
   | "winback"
@@ -155,6 +157,32 @@ export interface BillingProfileConfig {
   defaultHsnCode?: string;
 }
 
+/**
+ * Per-item price-optimization settings. Whether the tenant sees this at all
+ * is gated by `modules.pricing.enabled` (an admin-set flag — see
+ * KNOWLEDGE_GRAPH.md's `ai-pricing` node); this config is what the tenant
+ * fills in once they have access: which items to optimize and within what
+ * bounds. All optional per item — an item with no entry is skipped unless
+ * `applyToAllItems` is set.
+ */
+export interface PricingItemConfig {
+  enabled: boolean;
+  minPrice?: number;
+  maxPrice?: number;
+  /** Overrides defaultMaxChangePercent for this item only. */
+  maxChangePercent?: number;
+}
+
+export interface PricingConfig {
+  /** Optimize every menu item, ignoring individual `items[id].enabled` flags. */
+  applyToAllItems: boolean;
+  /** Cap on suggested price change (%) for items with no per-item override. */
+  defaultMaxChangePercent: number;
+  /** Name of a festival in `festivals[]` to bias recommendations toward, if any. */
+  occasion?: string;
+  items: Record<string, PricingItemConfig>;
+}
+
 export interface TenantConfig {
   slug: string;
   branding: TenantBranding;
@@ -174,6 +202,8 @@ export interface TenantConfig {
   qrCapture?: QrCaptureConfig;
   /** Optional — defaults applied in code when absent (see billingProfileConfig()). */
   billingProfile?: BillingProfileConfig;
+  /** Optional — defaults applied in code when absent (see pricingConfig()). */
+  pricingConfig?: PricingConfig;
 }
 
 /** Loyalty settings with defaults for tenants configured before the feature existed. */
@@ -204,6 +234,11 @@ export function billingProfileConfig(config: TenantConfig): BillingProfileConfig
 /** A tenant can't issue a legally-adequate GST invoice without these two. */
 export function billingProfileIsComplete(profile: BillingProfileConfig): boolean {
   return Boolean(profile.legalName?.trim() && profile.gstin?.trim());
+}
+
+/** Pricing settings with defaults for tenants who haven't configured any items yet. */
+export function pricingConfig(config: TenantConfig): PricingConfig {
+  return config.pricingConfig ?? { applyToAllItems: false, defaultMaxChangePercent: 15, items: {} };
 }
 
 export interface Tenant {
@@ -488,8 +523,37 @@ export interface Invoice {
   cgstAmount: number;
   sgstAmount: number;
   totalAmount: number;
+  /** Present only when a discount was applied — authorizing employee is then mandatory. */
+  discountType: "percent" | "flat" | null;
+  discountValue: number;
+  discountAmount: number;
+  authorizedByName: string | null;
+  authorizedById: string | null;
   status: "issued" | "cancelled";
   createdAt: Date;
+}
+
+/** Discount to apply to an invoice — the authorizing employee is mandatory whenever a discount is given. */
+export interface InvoiceDiscount {
+  type: "percent" | "flat";
+  value: number;
+  authorizedByName: string;
+  authorizedById: string;
+}
+
+// ---------- AI Pricing ----------
+
+/** A per-item price-optimization suggestion, stored once per (tenant, item). */
+export interface PriceRecommendation {
+  menuItemId: string;
+  name: string;
+  currentPrice: number;
+  suggestedPrice: number;
+  changePercent: number;
+  demandTrend: "rising" | "falling" | "flat";
+  confidence: "low" | "medium" | "high";
+  rationale: string | null;
+  computedAt: Date;
 }
 
 // ---------- Loyalty ----------

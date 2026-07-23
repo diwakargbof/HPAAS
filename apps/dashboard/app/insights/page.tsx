@@ -139,7 +139,12 @@ export default function InsightsPage() {
             </div>
 
             <div className="card">
-              <div className="section-title">Your best customers</div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                <div className="section-title" style={{ marginBottom: 0 }}>Your best customers</div>
+                <a href="/customers" style={{ fontSize: "0.85rem", color: "var(--primary)", fontWeight: 600 }}>
+                  View all customers →
+                </a>
+              </div>
               <table>
                 <thead>
                   <tr>

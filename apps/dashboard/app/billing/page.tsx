@@ -43,6 +43,7 @@ interface InvoiceView {
   cgstAmount: number;
   sgstAmount: number;
   totalAmount: number;
+  discountAmount: number;
   createdAt: string;
   printUrl: string;
 }
@@ -70,6 +71,12 @@ export default function BillingPage() {
   const [error, setError] = useState("");
   const [lastInvoice, setLastInvoice] = useState<{ invoice: InvoiceView; delivery: { whatsapp: string; email: string } } | null>(null);
 
+  const [discountOn, setDiscountOn] = useState(false);
+  const [discountType, setDiscountType] = useState<"percent" | "flat">("percent");
+  const [discountValue, setDiscountValue] = useState("");
+  const [employeeName, setEmployeeName] = useState("");
+  const [employeeId, setEmployeeId] = useState("");
+
   useEffect(() => {
     api<{ items: MenuItem[] }>("/menu")
       .then((r) => setMenuItems(r.items.filter((it) => it.available)))
@@ -95,9 +102,19 @@ export default function BillingPage() {
       unitPrice: it.price,
       gstRate: it.gstRate ?? billingProfile?.defaultGstRate ?? 0,
     }));
-  const previewTaxable = selectedItems.reduce((sum, it) => sum + it.qty * it.unitPrice, 0);
-  const previewTax = selectedItems.reduce((sum, it) => sum + (it.qty * it.unitPrice * it.gstRate) / 100, 0);
+  const rawTaxable = selectedItems.reduce((sum, it) => sum + it.qty * it.unitPrice, 0);
+  const rawTax = selectedItems.reduce((sum, it) => sum + (it.qty * it.unitPrice * it.gstRate) / 100, 0);
+  const discountNum = Number(discountValue) || 0;
+  const previewDiscountAmount = !discountOn
+    ? 0
+    : discountType === "percent"
+      ? (rawTaxable * Math.min(100, Math.max(0, discountNum))) / 100
+      : Math.min(Math.max(0, discountNum), rawTaxable);
+  const discountFactor = rawTaxable > 0 ? (rawTaxable - previewDiscountAmount) / rawTaxable : 1;
+  const previewTaxable = rawTaxable * discountFactor;
+  const previewTax = rawTax * discountFactor;
   const previewTotal = previewTaxable + previewTax;
+  const discountReady = !discountOn || (discountNum > 0 && employeeName.trim() && employeeId.trim());
 
   function setQty(id: string, qty: number) {
     setItemQty((prev) => ({ ...prev, [id]: Math.max(0, qty) }));
@@ -114,12 +131,25 @@ export default function BillingPage() {
           phone: `${countryCode}${phone.trim()}`,
           name: name.trim() || undefined,
           items: selectedItems.map(({ name, category, qty, unitPrice }) => ({ name, category, qty, unitPrice })),
+          discount:
+            discountOn && discountNum > 0
+              ? {
+                  type: discountType,
+                  value: discountNum,
+                  authorizedByName: employeeName.trim(),
+                  authorizedById: employeeId.trim(),
+                }
+              : undefined,
         }),
       });
       setLastInvoice(result);
       setPhone("");
       setName("");
       setItemQty({});
+      setDiscountOn(false);
+      setDiscountValue("");
+      setEmployeeName("");
+      setEmployeeId("");
       loadInvoices();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -210,18 +240,60 @@ export default function BillingPage() {
           </div>
         )}
 
+        <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
+          <input type="checkbox" checked={discountOn} onChange={(e) => setDiscountOn(e.target.checked)} style={{ width: "auto" }} />
+          Apply a discount (familiar customer / employee discount)
+        </label>
+
+        {discountOn && (
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 14, alignItems: "center" }}>
+            <select value={discountType} onChange={(e) => setDiscountType(e.target.value as "percent" | "flat")} style={{ width: 110 }}>
+              <option value="percent">% off</option>
+              <option value="flat">₹ flat off</option>
+            </select>
+            <input
+              type="number"
+              min={0}
+              value={discountValue}
+              onChange={(e) => setDiscountValue(e.target.value)}
+              placeholder={discountType === "percent" ? "e.g. 10" : "e.g. 100"}
+              style={{ maxWidth: 120 }}
+            />
+            <input
+              type="text"
+              value={employeeName}
+              onChange={(e) => setEmployeeName(e.target.value)}
+              placeholder="Employee name (required)"
+              style={{ maxWidth: 200 }}
+            />
+            <input
+              type="text"
+              value={employeeId}
+              onChange={(e) => setEmployeeId(e.target.value)}
+              placeholder="Employee ID (required)"
+              style={{ maxWidth: 160 }}
+            />
+          </div>
+        )}
+
         <div className="muted" style={{ marginBottom: 14 }}>
+          {previewDiscountAmount > 0 && <>Discount: −₹{previewDiscountAmount.toFixed(2)} &nbsp; </>}
           Taxable: ₹{previewTaxable.toFixed(2)} &nbsp; Tax (CGST+SGST): ₹{previewTax.toFixed(2)} &nbsp;
           <strong>Total: ₹{previewTotal.toFixed(2)}</strong>
         </div>
 
         <button
           className="btn btn-primary"
-          disabled={busy || !phone.trim() || selectedItems.length === 0}
+          disabled={busy || !phone.trim() || selectedItems.length === 0 || !discountReady}
           onClick={generateInvoice}
         >
           {busy ? "Generating…" : "Generate Invoice"}
         </button>
+        {discountOn && discountNum > 0 && !discountReady && (
+          <div className="muted" style={{ marginTop: 8, fontSize: "0.85rem" }}>
+            Employee name and ID are required to apply a discount.
+          </div>
+        )}
         {error && <div className="error-text" style={{ marginTop: 10 }}>{error}</div>}
 
         {lastInvoice && (

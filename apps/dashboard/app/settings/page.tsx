@@ -117,6 +117,17 @@ export default function SettingsPage() {
           </div>
 
           <div className="card">
+            <div className="section-title">Billing details</div>
+            <div className="muted" style={{ marginBottom: 12 }}>
+              Your legal business name, GSTIN, PAN and address — used on every GST tax invoice
+              you generate.
+            </div>
+            <a className="btn btn-primary" style={{ display: "inline-block" }} href="/settings/billing">
+              Edit tenant billing details
+            </a>
+          </div>
+
+          <div className="card">
             <div className="section-title">POS integration</div>
             <div className="muted" style={{ marginBottom: 8 }}>
               Your API key — used by your billing system to send sales and redemptions automatically.

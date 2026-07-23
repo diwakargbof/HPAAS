@@ -643,6 +643,31 @@ async function topProfilesByLtv(tenantId, limit) {
      ORDER BY f.monetary_ltv DESC LIMIT $2`, [tenantId, limit]);
   return rows.map((r) => ({ ...mapFeatures(r), phone: r.phone, traits: r.traits }));
 }
+var CUSTOMER_ORDER_BY = {
+  recent: "p.created_at DESC",
+  ltv: "f.monetary_ltv DESC NULLS LAST, p.created_at DESC",
+  purchases: "f.frequency_90d DESC NULLS LAST, p.created_at DESC",
+  alphabetical: "lower(p.traits->>'name') ASC NULLS LAST, p.phone ASC"
+};
+async function listCustomers(tenantId, opts = {}) {
+  const search = opts.search?.trim() || null;
+  const limit = opts.limit ?? 500;
+  const orderBy = CUSTOMER_ORDER_BY[opts.sort ?? "recent"];
+  const rows = await query(`SELECT p.*, f.monetary_ltv, f.frequency_90d, f.recency_days, f.favorite_item
+     FROM profiles p
+     LEFT JOIN features f ON f.profile_id = p.id AND f.tenant_id = p.tenant_id
+     WHERE p.tenant_id = $1
+       AND ($2::text IS NULL OR p.phone ILIKE '%' || $2 || '%' OR (p.traits->>'name') ILIKE '%' || $2 || '%')
+     ORDER BY ${orderBy}
+     LIMIT $3`, [tenantId, search, limit]);
+  return rows.map((r) => ({
+    ...mapProfile(r),
+    ltv: r.monetary_ltv !== null ? Number(r.monetary_ltv) : null,
+    purchases90d: r.frequency_90d,
+    recencyDays: r.recency_days,
+    favoriteItem: r.favorite_item
+  }));
+}
 async function upsertSegment(tenantId, name, rule, campaignType, opts = {}) {
   const row = await queryOne(`INSERT INTO segments (tenant_id, name, rule, campaign_type, description, source)
      VALUES ($1, $2, $3, $4, $5, $6)
@@ -920,6 +945,10 @@ async function setMenuItemAvailability(tenantId, itemId, available) {
 async function deleteMenuItem(tenantId, itemId) {
   await query(`DELETE FROM menu_items WHERE tenant_id = $1 AND id = $2`, [tenantId, itemId]);
 }
+async function updateMenuItemPrice(tenantId, itemId, price) {
+  const row = await queryOne(`UPDATE menu_items SET price = $3 WHERE tenant_id = $1 AND id = $2 RETURNING *`, [tenantId, itemId, price]);
+  return row ? mapMenuItem(row) : null;
+}
 async function recentMenuItems(tenantId, days) {
   const rows = await query(`SELECT * FROM menu_items
      WHERE tenant_id = $1 AND available AND created_at > now() - ($2 || ' days')::interval
@@ -1173,6 +1202,11 @@ var mapInvoice = (r) => ({
   cgstAmount: Number(r.cgst_amount),
   sgstAmount: Number(r.sgst_amount),
   totalAmount: Number(r.total_amount),
+  discountType: r.discount_type,
+  discountValue: Number(r.discount_value ?? 0),
+  discountAmount: Number(r.discount_amount ?? 0),
+  authorizedByName: r.authorized_by_name,
+  authorizedById: r.authorized_by_id,
   status: r.status,
   createdAt: r.created_at
 });
@@ -1189,8 +1223,9 @@ async function createInvoice(i) {
     const invoiceNumber = `${i.invoicePrefix}-${String(seq).padStart(4, "0")}`;
     const row = await client.query(`INSERT INTO invoices
          (tenant_id, token, invoice_number, profile_id, customer_name, customer_phone,
-          line_items, taxable_amount, cgst_amount, sgst_amount, total_amount)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+          line_items, taxable_amount, cgst_amount, sgst_amount, total_amount,
+          discount_type, discount_value, discount_amount, authorized_by_name, authorized_by_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
        RETURNING *`, [
       i.tenantId,
       i.token,
@@ -1202,7 +1237,12 @@ async function createInvoice(i) {
       taxableAmount,
       cgstAmount,
       sgstAmount,
-      totalAmount
+      totalAmount,
+      i.discountType ?? null,
+      i.discountValue ?? 0,
+      i.discountAmount ?? 0,
+      i.authorizedByName ?? null,
+      i.authorizedById ?? null
     ]);
     return mapInvoice(row.rows[0]);
   });
@@ -1214,6 +1254,62 @@ async function getInvoiceByToken(token) {
 async function listInvoices(tenantId, limit = 50) {
   const rows = await query(`SELECT * FROM invoices WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2`, [tenantId, limit]);
   return rows.map(mapInvoice);
+}
+
+// ../../packages/db/dist/repos-pricing.js
+async function tenantItemSalesByName(tenantId) {
+  const rows = await query(`SELECT item->>'name' AS name,
+            coalesce(sum((item->>'qty')::numeric) FILTER (WHERE e.ts >= now() - interval '90 days'), 0) AS units_90d,
+            coalesce(sum((item->>'qty')::numeric)
+              FILTER (WHERE e.ts >= now() - interval '180 days' AND e.ts < now() - interval '90 days'), 0) AS units_prior_90d
+     FROM events e, jsonb_array_elements(e.items) AS item
+     WHERE e.tenant_id = $1 AND e.event_type = 'purchase' AND item->>'name' <> ''
+     GROUP BY 1`, [tenantId]);
+  return new Map(rows.map((r) => [
+    String(r.name).toLowerCase(),
+    { unitsSold90d: Number(r.units_90d), unitsSoldPrior90d: Number(r.units_prior_90d) }
+  ]));
+}
+var mapPriceRecommendation = (r) => ({
+  menuItemId: r.menu_item_id,
+  name: r.name,
+  currentPrice: Number(r.current_price),
+  suggestedPrice: Number(r.suggested_price),
+  changePercent: Number(r.change_percent),
+  demandTrend: r.demand_trend,
+  confidence: r.confidence,
+  rationale: r.rationale,
+  computedAt: r.computed_at
+});
+async function upsertPriceRecommendations(tenantId, rows) {
+  for (const r of rows) {
+    await query(`INSERT INTO price_recommendations
+         (tenant_id, menu_item_id, current_price, suggested_price, change_percent, demand_trend, confidence, rationale, computed_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
+       ON CONFLICT (tenant_id, menu_item_id) DO UPDATE SET
+         current_price = EXCLUDED.current_price,
+         suggested_price = EXCLUDED.suggested_price,
+         change_percent = EXCLUDED.change_percent,
+         demand_trend = EXCLUDED.demand_trend,
+         confidence = EXCLUDED.confidence,
+         rationale = EXCLUDED.rationale,
+         computed_at = now()`, [tenantId, r.menuItemId, r.currentPrice, r.suggestedPrice, r.changePercent, r.demandTrend, r.confidence, r.rationale]);
+  }
+}
+async function listPriceRecommendations(tenantId) {
+  const rows = await query(`SELECT pr.*, m.name
+     FROM price_recommendations pr
+     JOIN menu_items m ON m.id = pr.menu_item_id AND m.tenant_id = pr.tenant_id
+     WHERE pr.tenant_id = $1
+     ORDER BY m.category, m.name`, [tenantId]);
+  return rows.map(mapPriceRecommendation);
+}
+async function getPriceRecommendation(tenantId, menuItemId) {
+  const row = await queryOne(`SELECT pr.*, m.name
+     FROM price_recommendations pr
+     JOIN menu_items m ON m.id = pr.menu_item_id AND m.tenant_id = pr.tenant_id
+     WHERE pr.tenant_id = $1 AND pr.menu_item_id = $2`, [tenantId, menuItemId]);
+  return row ? mapPriceRecommendation(row) : null;
 }
 
 // ../../packages/db/dist/migrate.js
@@ -1443,6 +1539,9 @@ function billingProfileConfig(config) {
 }
 function billingProfileIsComplete(profile) {
   return Boolean(profile.legalName?.trim() && profile.gstin?.trim());
+}
+function pricingConfig(config) {
+  return config.pricingConfig ?? { applyToAllItems: false, defaultMaxChangePercent: 15, items: {} };
 }
 
 // ../../packages/core/dist/loyalty.js
@@ -2065,6 +2164,61 @@ function computeInvoiceLines(items, tenant, menuByName) {
 function menuItemsByName(items) {
   return new Map(items.map((it) => [it.name.toLowerCase(), it]));
 }
+function applyInvoiceDiscount(lines, discount) {
+  const taxableAmount = lines.reduce((sum, l) => sum + l.taxableValue, 0);
+  const discountAmount = discount.type === "percent" ? taxableAmount * Math.max(0, discount.value) / 100 : Math.min(Math.max(0, discount.value), taxableAmount);
+  const factor = taxableAmount > 0 ? (taxableAmount - discountAmount) / taxableAmount : 1;
+  return {
+    discountAmount,
+    lines: lines.map((l) => {
+      const taxableValue = l.taxableValue * factor;
+      const cgst = taxableValue * l.gstRate / 200;
+      const sgst = cgst;
+      return { ...l, taxableValue, cgst, sgst, lineTotal: taxableValue + cgst + sgst };
+    })
+  };
+}
+
+// ../../packages/core/dist/pricing.js
+var TREND_THRESHOLD = 0.2;
+var TREND_TO_PERCENT_SCALE = 25;
+var FESTIVAL_BOOST_PERCENT = 5;
+function computePriceRecommendation(signal, bounds) {
+  const { menuItemId, name, currentPrice, unitsSold90d, unitsSoldPrior90d } = signal;
+  const trendPct = unitsSoldPrior90d > 0 ? (unitsSold90d - unitsSoldPrior90d) / unitsSoldPrior90d : unitsSold90d > 0 ? 1 : 0;
+  let demandTrend = "flat";
+  if (trendPct > TREND_THRESHOLD)
+    demandTrend = "rising";
+  else if (trendPct < -TREND_THRESHOLD)
+    demandTrend = "falling";
+  let changePercent = 0;
+  if (demandTrend === "rising") {
+    changePercent = Math.min(bounds.maxChangePercent, Math.abs(trendPct) * TREND_TO_PERCENT_SCALE);
+  } else if (demandTrend === "falling") {
+    changePercent = -Math.min(bounds.maxChangePercent, Math.abs(trendPct) * TREND_TO_PERCENT_SCALE);
+  }
+  if (bounds.festivalBoost && demandTrend !== "falling") {
+    changePercent = Math.min(bounds.maxChangePercent, changePercent + FESTIVAL_BOOST_PERCENT);
+  }
+  let suggestedPrice = currentPrice * (1 + changePercent / 100);
+  if (bounds.minPrice != null)
+    suggestedPrice = Math.max(bounds.minPrice, suggestedPrice);
+  if (bounds.maxPrice != null)
+    suggestedPrice = Math.min(bounds.maxPrice, suggestedPrice);
+  suggestedPrice = Math.round(suggestedPrice * 100) / 100;
+  const finalChangePercent = currentPrice > 0 ? Math.round((suggestedPrice - currentPrice) / currentPrice * 1e4) / 100 : 0;
+  const dataVolume = unitsSold90d + unitsSoldPrior90d;
+  const confidence = dataVolume >= 30 ? "high" : dataVolume >= 8 ? "medium" : "low";
+  return {
+    menuItemId,
+    name,
+    currentPrice,
+    suggestedPrice,
+    changePercent: finalChangePercent,
+    demandTrend,
+    confidence
+  };
+}
 
 // ../../packages/channels/dist/receipt.js
 var GRAPH_API_BASE = "https://graph.facebook.com/v20.0";
@@ -2659,6 +2813,26 @@ appRouter.get("/insights", async (req, res) => {
       incrementalRevenue: Math.round(incrementalRevenue),
       redemptions: totalRedemptions
     }
+  });
+});
+var CUSTOMER_SORTS = ["recent", "ltv", "purchases", "alphabetical"];
+appRouter.get("/customers", async (req, res) => {
+  const tenant = req.tenant;
+  const search = typeof req.query.search === "string" ? req.query.search : void 0;
+  const sortParam = String(req.query.sort ?? "recent");
+  const sort = CUSTOMER_SORTS.includes(sortParam) ? sortParam : "recent";
+  const customers = await listCustomers(tenant.id, { search, sort, limit: 500 });
+  res.json({
+    customers: customers.map((c) => ({
+      id: c.id,
+      name: typeof c.traits.name === "string" && c.traits.name ? c.traits.name : "Customer",
+      phone: c.phone,
+      ltv: c.ltv,
+      purchases90d: c.purchases90d,
+      recencyDays: c.recencyDays,
+      favoriteItem: c.favoriteItem,
+      joinedAt: c.createdAt
+    }))
   });
 });
 appRouter.get("/campaigns", async (req, res) => {
@@ -8958,6 +9132,18 @@ var AnthropicCopyProvider = class {
     ].filter(Boolean).join("\n"));
     return text.trim();
   }
+  async writePricingRationale(req) {
+    const text = await this.ask([
+      `You explain price-change recommendations for "${req.shopName}", a small Indian retail shop, to its owner.`,
+      `For each item below, write ONE short reason (max 140 chars, plain language, no jargon) the owner can read before deciding whether to apply it.`,
+      req.occasion ? `These recommendations are timed for the upcoming ${req.occasion}.` : "",
+      `Reply with JSON ONLY: an array of {"menuItemId", "rationale"}, one per item, same order as given.`
+    ].filter(Boolean).join("\n"), req.items.map((it) => `- ${it.menuItemId}: "${it.name}", \u20B9${it.currentPrice} \u2192 \u20B9${it.suggestedPrice} (demand ${it.demandTrend})`).join("\n"));
+    const parsed = parseJson(text);
+    if (!Array.isArray(parsed))
+      throw new Error("expected an array of pricing rationales");
+    return parsed;
+  }
   /** One system+user round trip, text back. */
   async ask(system, user) {
     const response = await this.client.messages.create({
@@ -9093,6 +9279,13 @@ var MockCopyProvider = class {
     ].filter(Boolean);
     return bits.slice(0, 3).join(" ");
   }
+  async writePricingRationale(req) {
+    return req.items.map((it) => {
+      const occasionBit = req.occasion ? ` ahead of ${req.occasion}` : "";
+      const rationale = it.demandTrend === "rising" ? `Selling more than usual lately${occasionBit} \u2014 a small increase captures demand without denting volume.` : it.demandTrend === "falling" ? `Sales have cooled off \u2014 a small cut can bring customers back.` : `Steady sales${occasionBit} \u2014 price left close to where it is.`;
+      return { menuItemId: it.menuItemId, rationale };
+    });
+  }
 };
 function capitalize(s) {
   const t = s.trim();
@@ -9149,6 +9342,30 @@ async function discoverSegments(req, provider = defaultProvider()) {
 async function generateCounterPitch(req, provider = defaultProvider()) {
   const line = (await provider.writeCounterPitch(req)).trim().replace(/^"|"$/g, "");
   return line.slice(0, 220);
+}
+function fallbackPricingRationale(item) {
+  return item.demandTrend === "rising" ? "Demand has been rising \u2014 a small increase captures it." : item.demandTrend === "falling" ? "Demand has cooled \u2014 a small cut may bring customers back." : "Demand has been steady.";
+}
+async function generatePricingRationale(req, provider = defaultProvider()) {
+  const byId = new Map(req.items.map((it) => [it.menuItemId, it]));
+  let results = [];
+  try {
+    results = await provider.writePricingRationale(req);
+  } catch {
+    results = [];
+  }
+  const rationales = {};
+  for (const r of results) {
+    if (byId.has(r.menuItemId) && typeof r.rationale === "string" && r.rationale.trim()) {
+      rationales[r.menuItemId] = r.rationale.trim().slice(0, 200);
+    }
+  }
+  for (const item of req.items) {
+    if (!rationales[item.menuItemId]) {
+      rationales[item.menuItemId] = fallbackPricingRationale(item);
+    }
+  }
+  return rationales;
 }
 
 // ../../packages/jobs/dist/copy-generator.js
@@ -9256,6 +9473,67 @@ async function buildCounterCard(tenant, profileId, opts = {}) {
   };
   await cacheCounterCard(tenant.id, profileId, card);
   return card;
+}
+
+// ../../packages/jobs/dist/pricing.js
+async function refreshPricingRecommendations(tenant) {
+  const config = pricingConfig(tenant.config);
+  const menuItems = await listMenuItems(tenant.id);
+  const targets = config.applyToAllItems ? menuItems : menuItems.filter((m) => config.items[m.id]?.enabled);
+  if (targets.length === 0)
+    return [];
+  const salesByName = await tenantItemSalesByName(tenant.id);
+  const window2 = activeFestivalWindow(tenant, /* @__PURE__ */ new Date());
+  const activeFestival = window2 ? tenant.config.festivals.find((f) => f.name === window2.name) : null;
+  const recommendations = targets.map((item) => {
+    const itemConfig = config.items[item.id];
+    const signal = salesByName.get(item.name.toLowerCase()) ?? { unitsSold90d: 0, unitsSoldPrior90d: 0 };
+    const festivalBoost = Boolean(activeFestival?.categories.includes(item.category));
+    return computePriceRecommendation({
+      menuItemId: item.id,
+      name: item.name,
+      currentPrice: item.price,
+      unitsSold90d: signal.unitsSold90d,
+      unitsSoldPrior90d: signal.unitsSoldPrior90d
+    }, {
+      minPrice: itemConfig?.minPrice,
+      maxPrice: itemConfig?.maxPrice,
+      maxChangePercent: itemConfig?.maxChangePercent ?? config.defaultMaxChangePercent,
+      festivalBoost
+    });
+  });
+  const rationaleByItem = await generatePricingRationale({
+    shopName: tenant.config.branding.shopName,
+    occasion: config.occasion ?? activeFestival?.name ?? null,
+    items: recommendations.map((r) => ({
+      menuItemId: r.menuItemId,
+      name: r.name,
+      currentPrice: r.currentPrice,
+      suggestedPrice: r.suggestedPrice,
+      demandTrend: r.demandTrend
+    }))
+  });
+  const rows = recommendations.map((r) => ({
+    menuItemId: r.menuItemId,
+    currentPrice: r.currentPrice,
+    suggestedPrice: r.suggestedPrice,
+    changePercent: r.changePercent,
+    demandTrend: r.demandTrend,
+    confidence: r.confidence,
+    rationale: rationaleByItem[r.menuItemId] ?? ""
+  }));
+  await upsertPriceRecommendations(tenant.id, rows);
+  return recommendations.map((r) => ({
+    menuItemId: r.menuItemId,
+    name: r.name,
+    currentPrice: r.currentPrice,
+    suggestedPrice: r.suggestedPrice,
+    changePercent: r.changePercent,
+    demandTrend: r.demandTrend,
+    confidence: r.confidence,
+    rationale: rationaleByItem[r.menuItemId] ?? null,
+    computedAt: /* @__PURE__ */ new Date()
+  }));
 }
 
 // src/routes/segments.ts
@@ -9692,9 +9970,48 @@ billingRouter.post("/invoices", async (req, res) => {
     res.status(400).json({ error: "at least one item is required" });
     return;
   }
+  const discountBody = req.body?.discount;
+  let discountType = null;
+  let discountValue = 0;
+  let discountAmount = 0;
+  let authorizedByName = null;
+  let authorizedById = null;
+  if (discountBody && Number(discountBody.value) > 0) {
+    const type = discountBody.type === "flat" ? "flat" : "percent";
+    const value = Number(discountBody.value) || 0;
+    const employeeName = String(discountBody.authorizedByName ?? "").trim();
+    const employeeId = String(discountBody.authorizedById ?? "").trim();
+    if (!employeeName || !employeeId) {
+      res.status(400).json({
+        error: "Applying a discount requires the authorizing employee's name and ID"
+      });
+      return;
+    }
+    discountType = type;
+    discountValue = type === "percent" ? Math.min(100, value) : value;
+    authorizedByName = employeeName;
+    authorizedById = employeeId;
+  }
   const profile = await upsertProfile(tenant.id, phone, name ? { name } : {});
   const menuItems = await listMenuItems(tenant.id);
-  const lineItems = computeInvoiceLines(items, tenant, menuItemsByName(menuItems));
+  let lineItems = computeInvoiceLines(items, tenant, menuItemsByName(menuItems));
+  if (discountType) {
+    const discounted = applyInvoiceDiscount(lineItems, { type: discountType, value: discountValue });
+    lineItems = discounted.lines;
+    discountAmount = discounted.discountAmount;
+  }
+  const taxableAmount = lineItems.reduce((sum, l) => sum + l.taxableValue, 0);
+  await ingestNormalizedEvents(tenant, [
+    {
+      tenantId: tenant.id,
+      phone,
+      traits: name ? { name } : {},
+      eventType: "purchase",
+      items,
+      amount: taxableAmount,
+      ts: /* @__PURE__ */ new Date()
+    }
+  ]);
   const invoice = await createInvoice({
     tenantId: tenant.id,
     token: generateInvoiceToken(),
@@ -9702,7 +10019,12 @@ billingRouter.post("/invoices", async (req, res) => {
     profileId: profile.id,
     customerName: name || profile.traits.name || null,
     customerPhone: phone,
-    lineItems
+    lineItems,
+    discountType,
+    discountValue,
+    discountAmount,
+    authorizedByName,
+    authorizedById
   });
   const view = invoiceView(req, invoice);
   const delivery = { whatsapp: "skipped", email: "skipped" };
@@ -9781,10 +10103,12 @@ th{text-align:left;background:#faf7f2}
   <tbody>${rows}</tbody>
 </table>
 <div class="totals">
+  ${invoice.discountAmount > 0 ? `<div>Discount (${invoice.discountType === "percent" ? `${invoice.discountValue}%` : `flat \u20B9${invoice.discountValue.toFixed(2)}`}): \u2212\u20B9${invoice.discountAmount.toFixed(2)}</div>` : ""}
   <div>Taxable amount: \u20B9${invoice.taxableAmount.toFixed(2)}</div>
   <div>CGST: \u20B9${invoice.cgstAmount.toFixed(2)} &nbsp; SGST: \u20B9${invoice.sgstAmount.toFixed(2)}</div>
   <div class="grand">Total: \u20B9${invoice.totalAmount.toFixed(2)}</div>
 </div>
+${invoice.authorizedByName ? `<div class="muted" style="margin-top:8px;font-size:0.85rem">Discount authorized by: ${escapeHtml2(invoice.authorizedByName)} (ID: ${escapeHtml2(invoice.authorizedById ?? "")})</div>` : ""}
 <p class="muted" style="margin-top:30px;font-size:0.8rem">This is a GST tax invoice generated for intra-state supply. ${printUrl}</p>
 <button onclick="window.print()" style="padding:10px 16px;border-radius:8px;border:none;background:#2a2420;color:#fff;cursor:pointer">Print</button>
 </body></html>`;
@@ -9797,6 +10121,82 @@ invoicesPublicRouter.get("/:token", async (req, res) => {
     return;
   }
   res.type("html").send(invoiceHtml(tenant, invoice, `${publicBaseUrl2(req)}/i/${invoice.token}`));
+});
+
+// src/routes/pricing.ts
+import { Router as Router10 } from "express";
+var pricingRouter = Router10();
+pricingRouter.use((req, res, next) => {
+  if (!req.tenant.config.modules.pricing?.enabled) {
+    res.status(403).json({ error: "AI Pricing is not enabled for this account" });
+    return;
+  }
+  next();
+});
+pricingRouter.get("/settings/pricing", (req, res) => {
+  res.json({ pricing: pricingConfig(req.tenant.config) });
+});
+pricingRouter.put("/settings/pricing", async (req, res) => {
+  const tenant = req.tenant;
+  const current = pricingConfig(tenant.config);
+  const body = req.body?.pricing ?? {};
+  const items = body.items && typeof body.items === "object" ? Object.fromEntries(
+    Object.entries(body.items).map(([id, v]) => [
+      id,
+      {
+        enabled: Boolean(v.enabled),
+        ...v.minPrice !== void 0 && v.minPrice !== null ? { minPrice: Math.max(0, Number(v.minPrice)) } : {},
+        ...v.maxPrice !== void 0 && v.maxPrice !== null ? { maxPrice: Math.max(0, Number(v.maxPrice)) } : {},
+        ...v.maxChangePercent !== void 0 && v.maxChangePercent !== null ? { maxChangePercent: Math.max(0, Math.min(100, Number(v.maxChangePercent))) } : {}
+      }
+    ])
+  ) : current.items;
+  const patch = {
+    pricingConfig: {
+      applyToAllItems: Boolean(body.applyToAllItems ?? current.applyToAllItems),
+      defaultMaxChangePercent: Math.max(
+        0,
+        Math.min(100, Number(body.defaultMaxChangePercent ?? current.defaultMaxChangePercent))
+      ),
+      ...body.occasion ? { occasion: String(body.occasion).trim().slice(0, 100) } : {},
+      items
+    }
+  };
+  await patchTenantConfig(tenant.id, patch);
+  res.json({ ok: true });
+});
+pricingRouter.post("/pricing/refresh", async (req, res) => {
+  const tenant = req.tenant;
+  const recommendations = await refreshPricingRecommendations(tenant);
+  res.json({ recommendations });
+});
+pricingRouter.get("/pricing/recommendations", async (req, res) => {
+  const tenant = req.tenant;
+  const config = pricingConfig(tenant.config);
+  const menuItems = await listMenuItems(tenant.id);
+  const targetIds = new Set(
+    config.applyToAllItems ? menuItems.map((m) => m.id) : menuItems.filter((m) => config.items[m.id]?.enabled).map((m) => m.id)
+  );
+  const recommendations = (await listPriceRecommendations(tenant.id)).filter((r) => targetIds.has(r.menuItemId));
+  res.json({ recommendations });
+});
+pricingRouter.post("/pricing/apply", async (req, res) => {
+  const tenant = req.tenant;
+  const menuItemId = req.body?.menuItemId ? String(req.body.menuItemId) : null;
+  const applyAll = Boolean(req.body?.all);
+  if (!menuItemId && !applyAll) {
+    res.status(400).json({ error: "menuItemId or all is required" });
+    return;
+  }
+  const recommendations = applyAll ? await listPriceRecommendations(tenant.id) : [await getPriceRecommendation(tenant.id, menuItemId)].filter((r) => r !== null);
+  if (recommendations.length === 0) {
+    res.status(404).json({ error: "no recommendation found" });
+    return;
+  }
+  for (const r of recommendations) {
+    await updateMenuItemPrice(tenant.id, r.menuItemId, r.suggestedPrice);
+  }
+  res.json({ applied: recommendations.length });
 });
 
 // src/app.ts
@@ -9824,6 +10224,7 @@ app.use("/v1/app", sessionAuth, counterRouter);
 app.use("/v1/app", sessionAuth, menuRouter);
 app.use("/v1/app", sessionAuth, qrOrdersRouter);
 app.use("/v1/app", sessionAuth, billingRouter);
+app.use("/v1/app", sessionAuth, pricingRouter);
 app.use("/v1", apiKeyAuth, ingestRouter);
 app.use("/v1", apiKeyAuth, redemptionsRouter);
 app.use("/v1", apiKeyAuth, counterRouter);

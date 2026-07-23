@@ -91,6 +91,28 @@ export interface PitchRequest {
   activeFestival: string | null;
 }
 
+// ---------- AI pricing rationale ----------
+
+export interface PricingRationaleItem {
+  menuItemId: string;
+  name: string;
+  currentPrice: number;
+  suggestedPrice: number;
+  demandTrend: "rising" | "falling" | "flat";
+}
+
+export interface PricingRationaleRequest {
+  shopName: string;
+  /** Festival name, if the tenant tied this refresh to an upcoming occasion. */
+  occasion?: string | null;
+  items: PricingRationaleItem[];
+}
+
+export interface PricingRationaleResult {
+  menuItemId: string;
+  rationale: string;
+}
+
 export interface CopyProvider {
   readonly name: string;
   generateTemplate(req: CopyRequest): Promise<CopyResult>;
@@ -100,4 +122,6 @@ export interface CopyProvider {
   discoverSegments(req: DiscoverSegmentsRequest): Promise<SegmentProposal[]>;
   /** One line the cashier can say out loud, in the shop's voice. */
   writeCounterPitch(req: PitchRequest): Promise<string>;
+  /** One short rationale per price recommendation, batched in a single call. */
+  writePricingRationale(req: PricingRationaleRequest): Promise<PricingRationaleResult[]>;
 }

@@ -13,6 +13,8 @@ import type {
   CopyResult,
   DiscoverSegmentsRequest,
   PitchRequest,
+  PricingRationaleRequest,
+  PricingRationaleResult,
   SegmentProposal,
 } from "./provider.js";
 import { AnthropicCopyProvider } from "./anthropic-provider.js";
@@ -25,6 +27,8 @@ export type {
   CopyResult,
   DiscoverSegmentsRequest,
   PitchRequest,
+  PricingRationaleRequest,
+  PricingRationaleResult,
   SampleCustomer,
   SegmentContext,
   SegmentProposal,
@@ -120,4 +124,44 @@ export async function generateCounterPitch(
 ): Promise<string> {
   const line = (await provider.writeCounterPitch(req)).trim().replace(/^"|"$/g, "");
   return line.slice(0, 220);
+}
+
+function fallbackPricingRationale(item: PricingRationaleRequest["items"][number]): string {
+  return item.demandTrend === "rising"
+    ? "Demand has been rising — a small increase captures it."
+    : item.demandTrend === "falling"
+      ? "Demand has cooled — a small cut may bring customers back."
+      : "Demand has been steady.";
+}
+
+/**
+ * One short rationale per price recommendation, one batched call for the
+ * whole set. Correctness never depends on the AI call: any item the model
+ * skips or a malformed reply falls back to a deterministic rationale built
+ * from its demand trend.
+ */
+export async function generatePricingRationale(
+  req: PricingRationaleRequest,
+  provider: CopyProvider = defaultProvider()
+): Promise<Record<string, string>> {
+  const byId = new Map(req.items.map((it) => [it.menuItemId, it]));
+  let results: PricingRationaleResult[] = [];
+  try {
+    results = await provider.writePricingRationale(req);
+  } catch {
+    results = [];
+  }
+
+  const rationales: Record<string, string> = {};
+  for (const r of results) {
+    if (byId.has(r.menuItemId) && typeof r.rationale === "string" && r.rationale.trim()) {
+      rationales[r.menuItemId] = r.rationale.trim().slice(0, 200);
+    }
+  }
+  for (const item of req.items) {
+    if (!rationales[item.menuItemId]) {
+      rationales[item.menuItemId] = fallbackPricingRationale(item);
+    }
+  }
+  return rationales;
 }

@@ -13,3 +13,4 @@ export * from "./loyalty.js";
 export * from "./coupons.js";
 export * from "./menu.js";
 export * from "./gst.js";
+export * from "./pricing.js";
