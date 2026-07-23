@@ -658,8 +658,9 @@ async function listCustomers(tenantId, opts = {}) {
      LEFT JOIN features f ON f.profile_id = p.id AND f.tenant_id = p.tenant_id
      WHERE p.tenant_id = $1
        AND ($2::text IS NULL OR p.phone ILIKE '%' || $2 || '%' OR (p.traits->>'name') ILIKE '%' || $2 || '%')
+       AND ($4::text IS NULL OR p.traits->>'businessUnitId' = $4)
      ORDER BY ${orderBy}
-     LIMIT $3`, [tenantId, search, limit]);
+     LIMIT $3`, [tenantId, search, limit, opts.businessUnitId ?? null]);
   return rows.map((r) => ({
     ...mapProfile(r),
     ltv: r.monetary_ltv !== null ? Number(r.monetary_ltv) : null,
@@ -908,20 +909,40 @@ var mapMenuItem = (r) => ({
   available: r.available,
   gstRate: r.gst_rate === null || r.gst_rate === void 0 ? null : Number(r.gst_rate),
   hsnCode: r.hsn_code ?? null,
+  businessUnitIds: r.business_unit_ids ?? [],
+  imageUrl: r.image_url ?? null,
   createdAt: r.created_at
 });
-async function listMenuItems(tenantId) {
-  const rows = await query(`SELECT * FROM menu_items WHERE tenant_id = $1 ORDER BY category, name`, [tenantId]);
-  return rows.map(mapMenuItem);
+async function listMenuItems(tenantId, opts = {}) {
+  const rows = await query(`SELECT m.*, bp.price AS branch_price
+     FROM menu_items m
+     LEFT JOIN menu_item_branch_prices bp
+       ON bp.tenant_id = m.tenant_id AND bp.menu_item_id = m.id AND bp.business_unit_id = $2
+     WHERE m.tenant_id = $1
+       AND ($2::text IS NULL OR m.business_unit_ids = '[]'::jsonb OR m.business_unit_ids @> to_jsonb($2::text))
+     ORDER BY m.category, m.name`, [tenantId, opts.businessUnitId ?? null]);
+  return rows.map((r) => ({
+    ...mapMenuItem(r),
+    branchPrice: r.branch_price !== null && r.branch_price !== void 0 ? Number(r.branch_price) : null
+  }));
+}
+async function upsertMenuItemBranchPrice(tenantId, menuItemId, businessUnitId, price) {
+  if (price === null) {
+    await query(`DELETE FROM menu_item_branch_prices WHERE tenant_id = $1 AND menu_item_id = $2 AND business_unit_id = $3`, [tenantId, menuItemId, businessUnitId]);
+    return;
+  }
+  await query(`INSERT INTO menu_item_branch_prices (tenant_id, menu_item_id, business_unit_id, price)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (tenant_id, menu_item_id, business_unit_id) DO UPDATE SET price = EXCLUDED.price, updated_at = now()`, [tenantId, menuItemId, businessUnitId, price]);
 }
 async function upsertMenuItem(tenantId, item) {
-  const row = await queryOne(`INSERT INTO menu_items (tenant_id, name, category, price, description, tags, available, gst_rate, hsn_code)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+  const row = await queryOne(`INSERT INTO menu_items (tenant_id, name, category, price, description, tags, available, gst_rate, hsn_code, business_unit_ids)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      ON CONFLICT (tenant_id, name) DO UPDATE SET
        category = EXCLUDED.category, price = EXCLUDED.price,
        description = EXCLUDED.description, tags = EXCLUDED.tags,
        available = EXCLUDED.available, gst_rate = EXCLUDED.gst_rate,
-       hsn_code = EXCLUDED.hsn_code
+       hsn_code = EXCLUDED.hsn_code, business_unit_ids = EXCLUDED.business_unit_ids
      RETURNING *`, [
     tenantId,
     item.name,
@@ -931,9 +952,36 @@ async function upsertMenuItem(tenantId, item) {
     JSON.stringify(item.tags ?? []),
     item.available ?? true,
     item.gstRate ?? null,
-    item.hsnCode ?? null
+    item.hsnCode ?? null,
+    JSON.stringify(item.businessUnitIds ?? [])
   ]);
   return mapMenuItem(row);
+}
+async function updateMenuItem(tenantId, itemId, patch) {
+  const row = await queryOne(`UPDATE menu_items SET
+       name = coalesce($3, name),
+       category = coalesce($4, category),
+       price = coalesce($5, price),
+       gst_rate = CASE WHEN $6::boolean THEN $7 ELSE gst_rate END,
+       hsn_code = CASE WHEN $8::boolean THEN $9 ELSE hsn_code END,
+       business_unit_ids = coalesce($10, business_unit_ids),
+       image_url = CASE WHEN $11::boolean THEN $12 ELSE image_url END
+     WHERE tenant_id = $1 AND id = $2
+     RETURNING *`, [
+    tenantId,
+    itemId,
+    patch.name ?? null,
+    patch.category ?? null,
+    patch.price ?? null,
+    "gstRate" in patch,
+    patch.gstRate ?? null,
+    "hsnCode" in patch,
+    patch.hsnCode ?? null,
+    patch.businessUnitIds !== void 0 ? JSON.stringify(patch.businessUnitIds) : null,
+    "imageUrl" in patch,
+    patch.imageUrl ?? null
+  ]);
+  return row ? mapMenuItem(row) : null;
 }
 async function setMenuItemAvailability(tenantId, itemId, available) {
   await query(`UPDATE menu_items SET available = $3 WHERE tenant_id = $1 AND id = $2`, [
@@ -1197,6 +1245,7 @@ var mapInvoice = (r) => ({
   profileId: r.profile_id,
   customerName: r.customer_name,
   customerPhone: r.customer_phone,
+  businessUnitId: r.business_unit_id,
   lineItems: r.line_items ?? [],
   taxableAmount: Number(r.taxable_amount),
   cgstAmount: Number(r.cgst_amount),
@@ -1223,9 +1272,9 @@ async function createInvoice(i) {
     const invoiceNumber = `${i.invoicePrefix}-${String(seq).padStart(4, "0")}`;
     const row = await client.query(`INSERT INTO invoices
          (tenant_id, token, invoice_number, profile_id, customer_name, customer_phone,
-          line_items, taxable_amount, cgst_amount, sgst_amount, total_amount,
+          business_unit_id, line_items, taxable_amount, cgst_amount, sgst_amount, total_amount,
           discount_type, discount_value, discount_amount, authorized_by_name, authorized_by_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
        RETURNING *`, [
       i.tenantId,
       i.token,
@@ -1233,6 +1282,7 @@ async function createInvoice(i) {
       i.profileId ?? null,
       i.customerName ?? null,
       i.customerPhone ?? null,
+      i.businessUnitId ?? null,
       JSON.stringify(i.lineItems),
       taxableAmount,
       cgstAmount,
@@ -1257,14 +1307,15 @@ async function listInvoices(tenantId, limit = 50) {
 }
 
 // ../../packages/db/dist/repos-pricing.js
-async function tenantItemSalesByName(tenantId) {
+async function tenantItemSalesByName(tenantId, businessUnitId) {
   const rows = await query(`SELECT item->>'name' AS name,
             coalesce(sum((item->>'qty')::numeric) FILTER (WHERE e.ts >= now() - interval '90 days'), 0) AS units_90d,
             coalesce(sum((item->>'qty')::numeric)
               FILTER (WHERE e.ts >= now() - interval '180 days' AND e.ts < now() - interval '90 days'), 0) AS units_prior_90d
      FROM events e, jsonb_array_elements(e.items) AS item
      WHERE e.tenant_id = $1 AND e.event_type = 'purchase' AND item->>'name' <> ''
-     GROUP BY 1`, [tenantId]);
+       AND ($2::text IS NULL OR e.location_id = $2)
+     GROUP BY 1`, [tenantId, businessUnitId ?? null]);
   return new Map(rows.map((r) => [
     String(r.name).toLowerCase(),
     { unitsSold90d: Number(r.units_90d), unitsSoldPrior90d: Number(r.units_prior_90d) }
@@ -1279,37 +1330,63 @@ var mapPriceRecommendation = (r) => ({
   demandTrend: r.demand_trend,
   confidence: r.confidence,
   rationale: r.rationale,
+  needsReview: r.needs_review,
+  businessUnitId: r.business_unit_id ?? "",
   computedAt: r.computed_at
 });
 async function upsertPriceRecommendations(tenantId, rows) {
   for (const r of rows) {
     await query(`INSERT INTO price_recommendations
-         (tenant_id, menu_item_id, current_price, suggested_price, change_percent, demand_trend, confidence, rationale, computed_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
-       ON CONFLICT (tenant_id, menu_item_id) DO UPDATE SET
+         (tenant_id, menu_item_id, current_price, suggested_price, change_percent, demand_trend, confidence, rationale, needs_review, business_unit_id, computed_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, now())
+       ON CONFLICT (tenant_id, menu_item_id, business_unit_id) DO UPDATE SET
          current_price = EXCLUDED.current_price,
          suggested_price = EXCLUDED.suggested_price,
          change_percent = EXCLUDED.change_percent,
          demand_trend = EXCLUDED.demand_trend,
          confidence = EXCLUDED.confidence,
          rationale = EXCLUDED.rationale,
-         computed_at = now()`, [tenantId, r.menuItemId, r.currentPrice, r.suggestedPrice, r.changePercent, r.demandTrend, r.confidence, r.rationale]);
+         needs_review = EXCLUDED.needs_review,
+         computed_at = now()`, [
+      tenantId,
+      r.menuItemId,
+      r.currentPrice,
+      r.suggestedPrice,
+      r.changePercent,
+      r.demandTrend,
+      r.confidence,
+      r.rationale,
+      r.needsReview,
+      r.businessUnitId ?? ""
+    ]);
   }
 }
-async function listPriceRecommendations(tenantId) {
+async function listPriceRecommendations(tenantId, businessUnitId = "") {
   const rows = await query(`SELECT pr.*, m.name
      FROM price_recommendations pr
      JOIN menu_items m ON m.id = pr.menu_item_id AND m.tenant_id = pr.tenant_id
-     WHERE pr.tenant_id = $1
-     ORDER BY m.category, m.name`, [tenantId]);
+     WHERE pr.tenant_id = $1 AND pr.business_unit_id = $2
+     ORDER BY m.category, m.name`, [tenantId, businessUnitId]);
   return rows.map(mapPriceRecommendation);
 }
-async function getPriceRecommendation(tenantId, menuItemId) {
+async function getPriceRecommendation(tenantId, menuItemId, businessUnitId = "") {
   const row = await queryOne(`SELECT pr.*, m.name
      FROM price_recommendations pr
      JOIN menu_items m ON m.id = pr.menu_item_id AND m.tenant_id = pr.tenant_id
-     WHERE pr.tenant_id = $1 AND pr.menu_item_id = $2`, [tenantId, menuItemId]);
+     WHERE pr.tenant_id = $1 AND pr.menu_item_id = $2 AND pr.business_unit_id = $3`, [tenantId, menuItemId, businessUnitId]);
   return row ? mapPriceRecommendation(row) : null;
+}
+
+// ../../packages/db/dist/repos-notifications.js
+var mapPlatformNotification = (r) => ({
+  id: r.id,
+  message: r.message,
+  severity: r.severity,
+  createdAt: r.created_at
+});
+async function listActivePlatformNotifications() {
+  const rows = await query(`SELECT * FROM platform_notifications WHERE active = true ORDER BY created_at DESC`);
+  return rows.map(mapPlatformNotification);
 }
 
 // ../../packages/db/dist/migrate.js
@@ -1541,7 +1618,35 @@ function billingProfileIsComplete(profile) {
   return Boolean(profile.legalName?.trim() && profile.gstin?.trim());
 }
 function pricingConfig(config) {
-  return config.pricingConfig ?? { applyToAllItems: false, defaultMaxChangePercent: 15, items: {} };
+  return config.pricingConfig ?? {
+    applyToAllItems: false,
+    defaultMaxChangePercent: 15,
+    roundingRule: "none",
+    safetyNetEnabled: true,
+    useBusinessUnitsInPricing: false,
+    items: {}
+  };
+}
+var DEFAULT_PERSONALIZATION_WIDGETS = [
+  { id: "default-stats", type: "customer_stats" },
+  { id: "default-repeat-trend", type: "repeat_trend" },
+  { id: "default-segment-sizes", type: "segment_sizes" },
+  { id: "default-top-customers", type: "top_customers" }
+];
+function personalizationDashboardConfig(config) {
+  return config.personalizationDashboard ?? { widgets: DEFAULT_PERSONALIZATION_WIDGETS };
+}
+function businessUnitsConfig(config) {
+  return config.businessUnits ?? { enabled: false, units: [] };
+}
+var DEFAULT_PRICING_WIDGETS = [
+  { id: "default-recommendation-summary", type: "recommendation_summary" },
+  { id: "default-demand-trend-chart", type: "demand_trend_chart" },
+  { id: "default-top-movers", type: "top_movers" },
+  { id: "default-needs-review", type: "needs_review_list" }
+];
+function pricingDashboardConfig(config) {
+  return config.pricingDashboard ?? { widgets: DEFAULT_PRICING_WIDGETS };
 }
 
 // ../../packages/core/dist/loyalty.js
@@ -2183,6 +2288,29 @@ function applyInvoiceDiscount(lines, discount) {
 var TREND_THRESHOLD = 0.2;
 var TREND_TO_PERCENT_SCALE = 25;
 var FESTIVAL_BOOST_PERCENT = 5;
+function applyRounding(price, rule) {
+  switch (rule) {
+    case "nearest_5":
+      return Math.round(price / 5) * 5;
+    case "nearest_10":
+      return Math.round(price / 10) * 10;
+    case "end_99":
+      return Math.max(0, Math.floor(price / 10) * 10 - 1 + 0.99);
+    case "end_95":
+      return Math.max(0, Math.floor(price / 10) * 10 - 1 + 0.95);
+    case "none":
+    default:
+      return price;
+  }
+}
+function clamp(price, bounds) {
+  let clamped = price;
+  if (bounds.minPrice != null)
+    clamped = Math.max(bounds.minPrice, clamped);
+  if (bounds.maxPrice != null)
+    clamped = Math.min(bounds.maxPrice, clamped);
+  return clamped;
+}
 function computePriceRecommendation(signal, bounds) {
   const { menuItemId, name, currentPrice, unitsSold90d, unitsSoldPrior90d } = signal;
   const trendPct = unitsSoldPrior90d > 0 ? (unitsSold90d - unitsSoldPrior90d) / unitsSoldPrior90d : unitsSold90d > 0 ? 1 : 0;
@@ -2200,15 +2328,15 @@ function computePriceRecommendation(signal, bounds) {
   if (bounds.festivalBoost && demandTrend !== "falling") {
     changePercent = Math.min(bounds.maxChangePercent, changePercent + FESTIVAL_BOOST_PERCENT);
   }
-  let suggestedPrice = currentPrice * (1 + changePercent / 100);
-  if (bounds.minPrice != null)
-    suggestedPrice = Math.max(bounds.minPrice, suggestedPrice);
-  if (bounds.maxPrice != null)
-    suggestedPrice = Math.min(bounds.maxPrice, suggestedPrice);
-  suggestedPrice = Math.round(suggestedPrice * 100) / 100;
+  const preClampPrice = currentPrice * (1 + changePercent / 100);
+  const clampedPrice = clamp(preClampPrice, bounds);
+  const roundedPrice = clamp(applyRounding(clampedPrice, bounds.roundingRule), bounds);
+  const suggestedPrice = Math.round(roundedPrice * 100) / 100;
   const finalChangePercent = currentPrice > 0 ? Math.round((suggestedPrice - currentPrice) / currentPrice * 1e4) / 100 : 0;
   const dataVolume = unitsSold90d + unitsSoldPrior90d;
   const confidence = dataVolume >= 30 ? "high" : dataVolume >= 8 ? "medium" : "low";
+  const hitBound = Math.abs(preClampPrice - clampedPrice) > 5e-3;
+  const needsReview = bounds.safetyNetEnabled !== false && (confidence === "low" || hitBound);
   return {
     menuItemId,
     name,
@@ -2216,7 +2344,8 @@ function computePriceRecommendation(signal, bounds) {
     suggestedPrice,
     changePercent: finalChangePercent,
     demandTrend,
-    confidence
+    confidence,
+    needsReview
   };
 }
 
@@ -2766,6 +2895,21 @@ ingestRouter.get("/uploads", async (req, res) => {
 
 // src/routes/app.ts
 import { Router as Router2 } from "express";
+function csvField(value) {
+  const s = value === null || value === void 0 ? "" : String(value);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+function toCsv(headers, rows) {
+  return [headers, ...rows].map((row) => row.map(csvField).join(",")).join("\r\n");
+}
+var PERSONALIZATION_WIDGET_TYPES = [
+  "customer_stats",
+  "repeat_trend",
+  "segment_sizes",
+  "top_customers",
+  "campaign_ab_compare",
+  "campaign_impact"
+];
 var appRouter = Router2();
 appRouter.get("/me", (req, res) => {
   const t = req.tenant;
@@ -2821,7 +2965,8 @@ appRouter.get("/customers", async (req, res) => {
   const search = typeof req.query.search === "string" ? req.query.search : void 0;
   const sortParam = String(req.query.sort ?? "recent");
   const sort = CUSTOMER_SORTS.includes(sortParam) ? sortParam : "recent";
-  const customers = await listCustomers(tenant.id, { search, sort, limit: 500 });
+  const businessUnitId = typeof req.query.businessUnitId === "string" ? req.query.businessUnitId : void 0;
+  const customers = await listCustomers(tenant.id, { search, sort, limit: 500, businessUnitId });
   res.json({
     customers: customers.map((c) => ({
       id: c.id,
@@ -2834,6 +2979,50 @@ appRouter.get("/customers", async (req, res) => {
       joinedAt: c.createdAt
     }))
   });
+});
+appRouter.get("/customers/export.csv", async (req, res) => {
+  const tenant = req.tenant;
+  const customers = await listCustomers(tenant.id, { sort: "recent", limit: 5e3 });
+  const csv = toCsv(
+    ["name", "phone", "ltv", "purchases90d", "recencyDays", "favoriteItem", "joinedAt"],
+    customers.map((c) => [
+      typeof c.traits.name === "string" && c.traits.name ? c.traits.name : "Customer",
+      c.phone,
+      c.ltv ?? "",
+      c.purchases90d ?? "",
+      c.recencyDays ?? "",
+      c.favoriteItem ?? "",
+      c.createdAt
+    ])
+  );
+  res.setHeader("Content-Type", "text/csv");
+  res.setHeader("Content-Disposition", `attachment; filename="customers.csv"`);
+  res.send(csv);
+});
+appRouter.get("/segments/:id/export.csv", async (req, res) => {
+  const tenant = req.tenant;
+  const segment = await getSegment(tenant.id, req.params.id);
+  if (!segment) {
+    res.status(404).json({ error: "segment not found" });
+    return;
+  }
+  const features = await audienceForSegment(tenant, segment);
+  const profiles = await getProfilesByIds(tenant.id, features.map((f) => f.profileId));
+  const profileById = new Map(profiles.map((p) => [p.id, p]));
+  const csv = toCsv(
+    ["name", "phone", "recencyDays", "frequency90d", "monetaryLtv", "favoriteItem"],
+    features.map((f) => {
+      const profile = profileById.get(f.profileId);
+      const name = typeof profile?.traits.name === "string" && profile.traits.name ? profile.traits.name : "Customer";
+      return [name, profile?.phone ?? "", f.recencyDays, f.frequency90d, f.monetaryLtv, f.favoriteItem ?? ""];
+    })
+  );
+  res.setHeader("Content-Type", "text/csv");
+  res.setHeader("Content-Disposition", `attachment; filename="segment-${segment.name.replace(/[^a-z0-9]/gi, "-")}.csv"`);
+  res.send(csv);
+});
+appRouter.get("/notifications", async (_req, res) => {
+  res.json({ notifications: await listActivePlatformNotifications() });
 });
 appRouter.get("/campaigns", async (req, res) => {
   const tenant = req.tenant;
@@ -3032,6 +3221,35 @@ appRouter.put("/settings/engagement", async (req, res) => {
   };
   await patchTenantConfig(tenant.id, patch);
   res.json(patch);
+});
+appRouter.get("/settings/personalization-dashboard", (req, res) => {
+  res.json({ dashboard: personalizationDashboardConfig(req.tenant.config) });
+});
+appRouter.put("/settings/personalization-dashboard", async (req, res) => {
+  const tenant = req.tenant;
+  const widgetsBody = Array.isArray(req.body?.dashboard?.widgets) ? req.body.dashboard.widgets : [];
+  const widgets = widgetsBody.filter((w) => PERSONALIZATION_WIDGET_TYPES.includes(w.type)).map((w) => ({
+    id: String(w.id ?? "").trim() || `widget-${Math.random().toString(36).slice(2, 10)}`,
+    type: w.type,
+    ...w.title ? { title: String(w.title).slice(0, 60) } : {},
+    ...w.config?.campaignId ? { config: { campaignId: String(w.config.campaignId) } } : {}
+  }));
+  await patchTenantConfig(tenant.id, { personalizationDashboard: { widgets } });
+  res.json({ dashboard: { widgets } });
+});
+appRouter.get("/settings/business-units", (req, res) => {
+  res.json(businessUnitsConfig(req.tenant.config));
+});
+appRouter.put("/settings/business-units", async (req, res) => {
+  const tenant = req.tenant;
+  const unitsBody = Array.isArray(req.body?.units) ? req.body.units : [];
+  const units = unitsBody.map((u) => ({
+    id: String(u.id ?? "").trim() || `bu-${Math.random().toString(36).slice(2, 10)}`,
+    name: String(u.name ?? "").trim()
+  })).filter((u) => u.name.length > 0).slice(0, 50);
+  const enabled = Boolean(req.body?.enabled);
+  await patchTenantConfig(tenant.id, { businessUnits: { enabled, units } });
+  res.json({ enabled, units });
 });
 appRouter.get("/settings", async (req, res) => {
   const tenant = req.tenant;
@@ -9476,30 +9694,36 @@ async function buildCounterCard(tenant, profileId, opts = {}) {
 }
 
 // ../../packages/jobs/dist/pricing.js
-async function refreshPricingRecommendations(tenant) {
+async function refreshPricingRecommendations(tenant, opts = {}) {
+  const businessUnitId = opts.businessUnitId ?? "";
   const config = pricingConfig(tenant.config);
-  const menuItems = await listMenuItems(tenant.id);
-  const targets = config.applyToAllItems ? menuItems : menuItems.filter((m) => config.items[m.id]?.enabled);
+  const menuItems = await listMenuItems(tenant.id, { businessUnitId: businessUnitId || void 0 });
+  const targets = menuItems.filter((m) => (config.applyToAllItems || config.items[m.id]?.enabled) && !config.items[m.id]?.manualOverride && // listMenuItems already filters to items sold at this branch (or
+  // everywhere) when businessUnitId is set — this is belt-and-suspenders.
+  (businessUnitId === "" || m.businessUnitIds.length === 0 || m.businessUnitIds.includes(businessUnitId)));
   if (targets.length === 0)
     return [];
-  const salesByName = await tenantItemSalesByName(tenant.id);
+  const salesByName = await tenantItemSalesByName(tenant.id, businessUnitId || void 0);
   const window2 = activeFestivalWindow(tenant, /* @__PURE__ */ new Date());
   const activeFestival = window2 ? tenant.config.festivals.find((f) => f.name === window2.name) : null;
   const recommendations = targets.map((item) => {
     const itemConfig = config.items[item.id];
     const signal = salesByName.get(item.name.toLowerCase()) ?? { unitsSold90d: 0, unitsSoldPrior90d: 0 };
     const festivalBoost = Boolean(activeFestival?.categories.includes(item.category));
+    const currentPrice = businessUnitId ? item.branchPrice ?? item.price : item.price;
     return computePriceRecommendation({
       menuItemId: item.id,
       name: item.name,
-      currentPrice: item.price,
+      currentPrice,
       unitsSold90d: signal.unitsSold90d,
       unitsSoldPrior90d: signal.unitsSoldPrior90d
     }, {
       minPrice: itemConfig?.minPrice,
       maxPrice: itemConfig?.maxPrice,
       maxChangePercent: itemConfig?.maxChangePercent ?? config.defaultMaxChangePercent,
-      festivalBoost
+      festivalBoost,
+      roundingRule: config.roundingRule,
+      safetyNetEnabled: config.safetyNetEnabled
     });
   });
   const rationaleByItem = await generatePricingRationale({
@@ -9520,7 +9744,9 @@ async function refreshPricingRecommendations(tenant) {
     changePercent: r.changePercent,
     demandTrend: r.demandTrend,
     confidence: r.confidence,
-    rationale: rationaleByItem[r.menuItemId] ?? ""
+    rationale: rationaleByItem[r.menuItemId] ?? "",
+    needsReview: r.needsReview,
+    businessUnitId
   }));
   await upsertPriceRecommendations(tenant.id, rows);
   return recommendations.map((r) => ({
@@ -9532,6 +9758,8 @@ async function refreshPricingRecommendations(tenant) {
     demandTrend: r.demandTrend,
     confidence: r.confidence,
     rationale: rationaleByItem[r.menuItemId] ?? null,
+    needsReview: r.needsReview,
+    businessUnitId,
     computedAt: /* @__PURE__ */ new Date()
   }));
 }
@@ -9764,13 +9992,87 @@ counterRouter.post("/direct-message", async (req, res) => {
 
 // src/routes/menu.ts
 import { Router as Router7 } from "express";
+import multer2 from "multer";
 var menuRouter = Router7();
+var upload2 = multer2({ storage: multer2.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+var imageUpload = multer2({ storage: multer2.memoryStorage(), limits: { fileSize: 800 * 1024 } });
+function csvField2(value) {
+  const s = value === null || value === void 0 ? "" : String(value);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+function toCsv2(headers, rows) {
+  return [headers, ...rows].map((row) => row.map(csvField2).join(",")).join("\r\n");
+}
 menuRouter.get("/menu", async (req, res) => {
-  res.json({ items: await listMenuItems(req.tenant.id) });
+  const businessUnitId = typeof req.query.businessUnitId === "string" ? req.query.businessUnitId : void 0;
+  res.json({ items: await listMenuItems(req.tenant.id, { businessUnitId }) });
+});
+menuRouter.get("/menu/export.csv", async (req, res) => {
+  const tenant = req.tenant;
+  const [items, recommendations] = await Promise.all([
+    listMenuItems(tenant.id),
+    listPriceRecommendations(tenant.id)
+  ]);
+  const recByItemId = new Map(recommendations.map((r) => [r.menuItemId, r]));
+  const csv = toCsv2(
+    ["name", "category", "price", "gstRate", "hsnCode", "available", "businessUnitIds", "suggestedPrice", "demandTrend", "confidence"],
+    items.map((item) => {
+      const rec = recByItemId.get(item.id);
+      return [
+        item.name,
+        item.category,
+        item.price,
+        item.gstRate ?? "",
+        item.hsnCode ?? "",
+        item.available,
+        item.businessUnitIds.join(";"),
+        rec?.suggestedPrice ?? "",
+        rec?.demandTrend ?? "",
+        rec?.confidence ?? ""
+      ];
+    })
+  );
+  res.setHeader("Content-Type", "text/csv");
+  res.setHeader("Content-Disposition", `attachment; filename="menu.csv"`);
+  res.send(csv);
+});
+menuRouter.post("/menu/import", upload2.single("file"), async (req, res) => {
+  const tenant = req.tenant;
+  if (!req.file) {
+    res.status(400).json({ error: "file is required" });
+    return;
+  }
+  const rows = parseCsv(req.file.buffer.toString("utf-8"));
+  const errors = [];
+  let processed = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const name = String(row.name ?? "").trim();
+    if (!name) {
+      errors.push({ rowNumber: i + 2, reason: "missing name" });
+      continue;
+    }
+    const price = Number(row.price);
+    if (Number.isNaN(price)) {
+      errors.push({ rowNumber: i + 2, reason: `invalid price: "${row.price ?? ""}"` });
+      continue;
+    }
+    await upsertMenuItem(tenant.id, {
+      name,
+      category: String(row.category ?? "uncategorized").trim() || "uncategorized",
+      price: Math.max(0, price),
+      gstRate: row.gstRate && !Number.isNaN(Number(row.gstRate)) ? Math.max(0, Math.min(28, Number(row.gstRate))) : null,
+      hsnCode: row.hsnCode?.trim() || null,
+      available: String(row.available ?? "true").toLowerCase() !== "false",
+      businessUnitIds: row.businessUnitIds ? row.businessUnitIds.split(";").map((s) => s.trim()).filter(Boolean) : []
+    });
+    processed++;
+  }
+  res.json({ rowsProcessed: processed, errors });
 });
 menuRouter.post("/menu", async (req, res) => {
   const tenant = req.tenant;
-  const { name, category, price, description, tags, available, gstRate, hsnCode } = req.body ?? {};
+  const { name, category, price, description, tags, available, gstRate, hsnCode, businessUnitIds } = req.body ?? {};
   if (!name || typeof name !== "string" || !name.trim()) {
     res.status(400).json({ error: "name is required" });
     return;
@@ -9783,7 +10085,8 @@ menuRouter.post("/menu", async (req, res) => {
     tags: Array.isArray(tags) ? tags.map(String) : [],
     available: available !== false,
     gstRate: gstRate !== null && gstRate !== void 0 && gstRate !== "" ? Math.max(0, Math.min(28, Number(gstRate))) : null,
-    hsnCode: typeof hsnCode === "string" && hsnCode.trim() ? hsnCode.trim() : null
+    hsnCode: typeof hsnCode === "string" && hsnCode.trim() ? hsnCode.trim() : null,
+    businessUnitIds: Array.isArray(businessUnitIds) ? businessUnitIds.map(String) : []
   });
   res.json({ item });
 });
@@ -9792,9 +10095,70 @@ menuRouter.patch("/menu/:id/availability", async (req, res) => {
   await setMenuItemAvailability(tenant.id, req.params.id, Boolean(req.body?.available));
   res.json({ ok: true });
 });
+menuRouter.patch("/menu/:id", async (req, res) => {
+  const tenant = req.tenant;
+  const { name, category, price, gstRate, hsnCode, businessUnitIds } = req.body ?? {};
+  const patch = {};
+  if (typeof name === "string" && name.trim()) patch.name = name.trim();
+  if (typeof category === "string" && category.trim()) patch.category = category.trim();
+  if (price !== void 0 && price !== null && price !== "" && !Number.isNaN(Number(price))) {
+    patch.price = Math.max(0, Number(price));
+  }
+  if ("gstRate" in (req.body ?? {})) {
+    patch.gstRate = gstRate !== null && gstRate !== void 0 && gstRate !== "" ? Math.max(0, Math.min(28, Number(gstRate))) : null;
+  }
+  if ("hsnCode" in (req.body ?? {})) {
+    patch.hsnCode = typeof hsnCode === "string" && hsnCode.trim() ? hsnCode.trim() : null;
+  }
+  if (Array.isArray(businessUnitIds)) patch.businessUnitIds = businessUnitIds.map(String);
+  const item = await updateMenuItem(tenant.id, req.params.id, patch);
+  if (!item) {
+    res.status(404).json({ error: "item not found" });
+    return;
+  }
+  res.json({ item });
+});
 menuRouter.delete("/menu/:id", async (req, res) => {
   await deleteMenuItem(req.tenant.id, req.params.id);
   res.json({ ok: true });
+});
+menuRouter.post("/menu/:id/image", imageUpload.single("file"), async (req, res) => {
+  const tenant = req.tenant;
+  if (!req.file) {
+    res.status(400).json({ error: "file is required" });
+    return;
+  }
+  if (!req.file.mimetype.startsWith("image/")) {
+    res.status(400).json({ error: "file must be an image" });
+    return;
+  }
+  const dataUri = `data:${req.file.mimetype};base64,${req.file.buffer.toString("base64")}`;
+  const item = await updateMenuItem(tenant.id, req.params.id, { imageUrl: dataUri });
+  if (!item) {
+    res.status(404).json({ error: "item not found" });
+    return;
+  }
+  res.json({ item });
+});
+menuRouter.put("/menu/:id/branch-price", async (req, res) => {
+  const tenant = req.tenant;
+  const businessUnitId = String(req.body?.businessUnitId ?? "").trim();
+  if (!businessUnitId) {
+    res.status(400).json({ error: "businessUnitId is required" });
+    return;
+  }
+  const priceBody = req.body?.price;
+  const price = priceBody === null || priceBody === void 0 || priceBody === "" ? null : Math.max(0, Number(priceBody));
+  await upsertMenuItemBranchPrice(tenant.id, req.params.id, businessUnitId, price);
+  res.json({ ok: true });
+});
+menuRouter.delete("/menu/:id/image", async (req, res) => {
+  const item = await updateMenuItem(req.tenant.id, req.params.id, { imageUrl: null });
+  if (!item) {
+    res.status(404).json({ error: "item not found" });
+    return;
+  }
+  res.json({ item });
 });
 menuRouter.post("/menu/import-from-history", async (req, res) => {
   res.json(await importMenuFromHistory(req.tenant.id));
@@ -9956,6 +10320,7 @@ billingRouter.post("/invoices", async (req, res) => {
   }
   const phone = normalizePhone(String(req.body?.phone ?? ""));
   const name = String(req.body?.name ?? "").trim();
+  const businessUnitId = String(req.body?.businessUnitId ?? "").trim() || null;
   if (!phone) {
     res.status(400).json({ error: "valid phone is required" });
     return;
@@ -9992,7 +10357,10 @@ billingRouter.post("/invoices", async (req, res) => {
     authorizedByName = employeeName;
     authorizedById = employeeId;
   }
-  const profile = await upsertProfile(tenant.id, phone, name ? { name } : {});
+  const profile = await upsertProfile(tenant.id, phone, {
+    ...name ? { name } : {},
+    ...businessUnitId ? { businessUnitId } : {}
+  });
   const menuItems = await listMenuItems(tenant.id);
   let lineItems = computeInvoiceLines(items, tenant, menuItemsByName(menuItems));
   if (discountType) {
@@ -10006,6 +10374,7 @@ billingRouter.post("/invoices", async (req, res) => {
       tenantId: tenant.id,
       phone,
       traits: name ? { name } : {},
+      locationId: businessUnitId ?? void 0,
       eventType: "purchase",
       items,
       amount: taxableAmount,
@@ -10019,6 +10388,7 @@ billingRouter.post("/invoices", async (req, res) => {
     profileId: profile.id,
     customerName: name || profile.traits.name || null,
     customerPhone: phone,
+    businessUnitId,
     lineItems,
     discountType,
     discountValue,
@@ -10125,6 +10495,14 @@ invoicesPublicRouter.get("/:token", async (req, res) => {
 
 // src/routes/pricing.ts
 import { Router as Router10 } from "express";
+var ROUNDING_RULES = ["none", "nearest_5", "nearest_10", "end_99", "end_95"];
+var PRICING_WIDGET_TYPES = [
+  "recommendation_summary",
+  "demand_trend_chart",
+  "top_movers",
+  "needs_review_list",
+  "pricing_config_summary"
+];
 var pricingRouter = Router10();
 pricingRouter.use((req, res, next) => {
   if (!req.tenant.config.modules.pricing?.enabled) {
@@ -10135,6 +10513,20 @@ pricingRouter.use((req, res, next) => {
 });
 pricingRouter.get("/settings/pricing", (req, res) => {
   res.json({ pricing: pricingConfig(req.tenant.config) });
+});
+pricingRouter.get("/settings/pricing-dashboard", (req, res) => {
+  res.json({ dashboard: pricingDashboardConfig(req.tenant.config) });
+});
+pricingRouter.put("/settings/pricing-dashboard", async (req, res) => {
+  const tenant = req.tenant;
+  const widgetsBody = Array.isArray(req.body?.dashboard?.widgets) ? req.body.dashboard.widgets : [];
+  const widgets = widgetsBody.filter((w) => PRICING_WIDGET_TYPES.includes(w.type)).map((w) => ({
+    id: String(w.id ?? "").trim() || `widget-${Math.random().toString(36).slice(2, 10)}`,
+    type: w.type,
+    ...w.title ? { title: String(w.title).slice(0, 60) } : {}
+  }));
+  await patchTenantConfig(tenant.id, { pricingDashboard: { widgets } });
+  res.json({ dashboard: { widgets } });
 });
 pricingRouter.put("/settings/pricing", async (req, res) => {
   const tenant = req.tenant;
@@ -10147,7 +10539,8 @@ pricingRouter.put("/settings/pricing", async (req, res) => {
         enabled: Boolean(v.enabled),
         ...v.minPrice !== void 0 && v.minPrice !== null ? { minPrice: Math.max(0, Number(v.minPrice)) } : {},
         ...v.maxPrice !== void 0 && v.maxPrice !== null ? { maxPrice: Math.max(0, Number(v.maxPrice)) } : {},
-        ...v.maxChangePercent !== void 0 && v.maxChangePercent !== null ? { maxChangePercent: Math.max(0, Math.min(100, Number(v.maxChangePercent))) } : {}
+        ...v.maxChangePercent !== void 0 && v.maxChangePercent !== null ? { maxChangePercent: Math.max(0, Math.min(100, Number(v.maxChangePercent))) } : {},
+        manualOverride: Boolean(v.manualOverride)
       }
     ])
   ) : current.items;
@@ -10159,6 +10552,9 @@ pricingRouter.put("/settings/pricing", async (req, res) => {
         Math.min(100, Number(body.defaultMaxChangePercent ?? current.defaultMaxChangePercent))
       ),
       ...body.occasion ? { occasion: String(body.occasion).trim().slice(0, 100) } : {},
+      roundingRule: ROUNDING_RULES.includes(body.roundingRule) ? body.roundingRule : current.roundingRule ?? "none",
+      safetyNetEnabled: Boolean(body.safetyNetEnabled ?? current.safetyNetEnabled ?? true),
+      useBusinessUnitsInPricing: Boolean(body.useBusinessUnitsInPricing ?? current.useBusinessUnitsInPricing ?? false),
       items
     }
   };
@@ -10167,36 +10563,63 @@ pricingRouter.put("/settings/pricing", async (req, res) => {
 });
 pricingRouter.post("/pricing/refresh", async (req, res) => {
   const tenant = req.tenant;
-  const recommendations = await refreshPricingRecommendations(tenant);
+  const config = pricingConfig(tenant.config);
+  const businessUnitId = config.useBusinessUnitsInPricing && typeof req.body?.businessUnitId === "string" ? req.body.businessUnitId : void 0;
+  const recommendations = await refreshPricingRecommendations(tenant, { businessUnitId });
   res.json({ recommendations });
 });
 pricingRouter.get("/pricing/recommendations", async (req, res) => {
   const tenant = req.tenant;
   const config = pricingConfig(tenant.config);
-  const menuItems = await listMenuItems(tenant.id);
+  const businessUnitId = config.useBusinessUnitsInPricing && typeof req.query.businessUnitId === "string" ? req.query.businessUnitId : "";
+  const menuItems = await listMenuItems(tenant.id, { businessUnitId: businessUnitId || void 0 });
   const targetIds = new Set(
-    config.applyToAllItems ? menuItems.map((m) => m.id) : menuItems.filter((m) => config.items[m.id]?.enabled).map((m) => m.id)
+    menuItems.filter((m) => (config.applyToAllItems || config.items[m.id]?.enabled) && !config.items[m.id]?.manualOverride).map((m) => m.id)
   );
-  const recommendations = (await listPriceRecommendations(tenant.id)).filter((r) => targetIds.has(r.menuItemId));
+  const recommendations = (await listPriceRecommendations(tenant.id, businessUnitId)).filter(
+    (r) => targetIds.has(r.menuItemId)
+  );
   res.json({ recommendations });
 });
 pricingRouter.post("/pricing/apply", async (req, res) => {
   const tenant = req.tenant;
+  const config = pricingConfig(tenant.config);
   const menuItemId = req.body?.menuItemId ? String(req.body.menuItemId) : null;
   const applyAll = Boolean(req.body?.all);
+  const confirmReview = Boolean(req.body?.confirmReview);
+  const businessUnitId = config.useBusinessUnitsInPricing && typeof req.body?.businessUnitId === "string" ? req.body.businessUnitId : "";
   if (!menuItemId && !applyAll) {
     res.status(400).json({ error: "menuItemId or all is required" });
     return;
   }
-  const recommendations = applyAll ? await listPriceRecommendations(tenant.id) : [await getPriceRecommendation(tenant.id, menuItemId)].filter((r) => r !== null);
-  if (recommendations.length === 0) {
-    res.status(404).json({ error: "no recommendation found" });
+  if (menuItemId) {
+    const recommendation = await getPriceRecommendation(tenant.id, menuItemId, businessUnitId);
+    if (!recommendation) {
+      res.status(404).json({ error: "no recommendation found" });
+      return;
+    }
+    if (recommendation.needsReview && !confirmReview) {
+      res.status(409).json({ error: "This recommendation needs review before applying" });
+      return;
+    }
+    if (businessUnitId) {
+      await upsertMenuItemBranchPrice(tenant.id, recommendation.menuItemId, businessUnitId, recommendation.suggestedPrice);
+    } else {
+      await updateMenuItemPrice(tenant.id, recommendation.menuItemId, recommendation.suggestedPrice);
+    }
+    res.json({ applied: 1, skippedNeedsReview: 0 });
     return;
   }
-  for (const r of recommendations) {
-    await updateMenuItemPrice(tenant.id, r.menuItemId, r.suggestedPrice);
+  const all = await listPriceRecommendations(tenant.id, businessUnitId);
+  const applicable = all.filter((r) => !r.needsReview);
+  for (const r of applicable) {
+    if (businessUnitId) {
+      await upsertMenuItemBranchPrice(tenant.id, r.menuItemId, businessUnitId, r.suggestedPrice);
+    } else {
+      await updateMenuItemPrice(tenant.id, r.menuItemId, r.suggestedPrice);
+    }
   }
-  res.json({ applied: recommendations.length });
+  res.json({ applied: applicable.length, skippedNeedsReview: all.length - applicable.length });
 });
 
 // src/app.ts

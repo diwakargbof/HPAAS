@@ -24,15 +24,63 @@ const mapMenuItem = (r: any): MenuItem => ({
   available: r.available,
   gstRate: r.gst_rate === null || r.gst_rate === undefined ? null : Number(r.gst_rate),
   hsnCode: r.hsn_code ?? null,
+  businessUnitIds: r.business_unit_ids ?? [],
+  imageUrl: r.image_url ?? null,
   createdAt: r.created_at,
 });
 
-export async function listMenuItems(tenantId: string): Promise<MenuItem[]> {
-  const rows = await query(
-    `SELECT * FROM menu_items WHERE tenant_id = $1 ORDER BY category, name`,
-    [tenantId]
+export async function listMenuItems(
+  tenantId: string,
+  opts: { businessUnitId?: string } = {}
+): Promise<Array<MenuItem & { branchPrice: number | null }>> {
+  const rows = await query<any>(
+    `SELECT m.*, bp.price AS branch_price
+     FROM menu_items m
+     LEFT JOIN menu_item_branch_prices bp
+       ON bp.tenant_id = m.tenant_id AND bp.menu_item_id = m.id AND bp.business_unit_id = $2
+     WHERE m.tenant_id = $1
+       AND ($2::text IS NULL OR m.business_unit_ids = '[]'::jsonb OR m.business_unit_ids @> to_jsonb($2::text))
+     ORDER BY m.category, m.name`,
+    [tenantId, opts.businessUnitId ?? null]
   );
-  return rows.map(mapMenuItem);
+  return rows.map((r) => ({
+    ...mapMenuItem(r),
+    branchPrice: r.branch_price !== null && r.branch_price !== undefined ? Number(r.branch_price) : null,
+  }));
+}
+
+/** Sets (or clears, when price is null) a branch's price override for one item. */
+export async function upsertMenuItemBranchPrice(
+  tenantId: string,
+  menuItemId: string,
+  businessUnitId: string,
+  price: number | null
+): Promise<void> {
+  if (price === null) {
+    await query(
+      `DELETE FROM menu_item_branch_prices WHERE tenant_id = $1 AND menu_item_id = $2 AND business_unit_id = $3`,
+      [tenantId, menuItemId, businessUnitId]
+    );
+    return;
+  }
+  await query(
+    `INSERT INTO menu_item_branch_prices (tenant_id, menu_item_id, business_unit_id, price)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (tenant_id, menu_item_id, business_unit_id) DO UPDATE SET price = EXCLUDED.price, updated_at = now()`,
+    [tenantId, menuItemId, businessUnitId, price]
+  );
+}
+
+/** Every branch price override for one item, keyed by business_unit_id. */
+export async function menuItemBranchPrices(
+  tenantId: string,
+  menuItemId: string
+): Promise<Record<string, number>> {
+  const rows = await query<any>(
+    `SELECT business_unit_id, price FROM menu_item_branch_prices WHERE tenant_id = $1 AND menu_item_id = $2`,
+    [tenantId, menuItemId]
+  );
+  return Object.fromEntries(rows.map((r) => [r.business_unit_id, Number(r.price)]));
 }
 
 export async function upsertMenuItem(
@@ -46,16 +94,17 @@ export async function upsertMenuItem(
     available?: boolean;
     gstRate?: number | null;
     hsnCode?: string | null;
+    businessUnitIds?: string[];
   }
 ): Promise<MenuItem> {
   const row = await queryOne(
-    `INSERT INTO menu_items (tenant_id, name, category, price, description, tags, available, gst_rate, hsn_code)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `INSERT INTO menu_items (tenant_id, name, category, price, description, tags, available, gst_rate, hsn_code, business_unit_ids)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      ON CONFLICT (tenant_id, name) DO UPDATE SET
        category = EXCLUDED.category, price = EXCLUDED.price,
        description = EXCLUDED.description, tags = EXCLUDED.tags,
        available = EXCLUDED.available, gst_rate = EXCLUDED.gst_rate,
-       hsn_code = EXCLUDED.hsn_code
+       hsn_code = EXCLUDED.hsn_code, business_unit_ids = EXCLUDED.business_unit_ids
      RETURNING *`,
     [
       tenantId,
@@ -67,9 +116,53 @@ export async function upsertMenuItem(
       item.available ?? true,
       item.gstRate ?? null,
       item.hsnCode ?? null,
+      JSON.stringify(item.businessUnitIds ?? []),
     ]
   );
   return mapMenuItem(row);
+}
+
+/** General field edit by id — used for inline price/category/tag edits from Master Data. */
+export async function updateMenuItem(
+  tenantId: string,
+  itemId: string,
+  patch: {
+    name?: string;
+    category?: string;
+    price?: number;
+    gstRate?: number | null;
+    hsnCode?: string | null;
+    businessUnitIds?: string[];
+    imageUrl?: string | null;
+  }
+): Promise<MenuItem | null> {
+  const row = await queryOne(
+    `UPDATE menu_items SET
+       name = coalesce($3, name),
+       category = coalesce($4, category),
+       price = coalesce($5, price),
+       gst_rate = CASE WHEN $6::boolean THEN $7 ELSE gst_rate END,
+       hsn_code = CASE WHEN $8::boolean THEN $9 ELSE hsn_code END,
+       business_unit_ids = coalesce($10, business_unit_ids),
+       image_url = CASE WHEN $11::boolean THEN $12 ELSE image_url END
+     WHERE tenant_id = $1 AND id = $2
+     RETURNING *`,
+    [
+      tenantId,
+      itemId,
+      patch.name ?? null,
+      patch.category ?? null,
+      patch.price ?? null,
+      "gstRate" in patch,
+      patch.gstRate ?? null,
+      "hsnCode" in patch,
+      patch.hsnCode ?? null,
+      patch.businessUnitIds !== undefined ? JSON.stringify(patch.businessUnitIds) : null,
+      "imageUrl" in patch,
+      patch.imageUrl ?? null,
+    ]
+  );
+  return row ? mapMenuItem(row) : null;
 }
 
 export async function setMenuItemAvailability(

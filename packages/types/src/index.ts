@@ -171,6 +171,8 @@ export interface PricingItemConfig {
   maxPrice?: number;
   /** Overrides defaultMaxChangePercent for this item only. */
   maxChangePercent?: number;
+  /** Skip this item entirely — the tenant sets its price by hand in Master Data. */
+  manualOverride?: boolean;
 }
 
 export type PricingRoundingRule = "none" | "nearest_5" | "nearest_10" | "end_99" | "end_95";
@@ -186,6 +188,8 @@ export interface PricingConfig {
   roundingRule?: PricingRoundingRule;
   /** Flags thin-data/bound-hitting recommendations as needing review before applying. Default true. */
   safetyNetEnabled?: boolean;
+  /** Show the branch selector on Recommendations and scope refresh/apply by business unit. Default false — off even if Business Units are enabled elsewhere. */
+  useBusinessUnitsInPricing?: boolean;
   items: Record<string, PricingItemConfig>;
 }
 
@@ -196,7 +200,8 @@ export type PersonalizationWidgetType =
   | "repeat_trend"
   | "segment_sizes"
   | "top_customers"
-  | "campaign_ab_compare";
+  | "campaign_ab_compare"
+  | "campaign_impact";
 
 export interface PersonalizationWidget {
   /** Stable id for ordering/removal — not a DB id, just a client-assigned key. */
@@ -209,6 +214,47 @@ export interface PersonalizationWidget {
 
 export interface PersonalizationDashboardConfig {
   widgets: PersonalizationWidget[];
+}
+
+// ---------- Pricing dashboard ----------
+// Same configurable-widget-board pattern as Personalization: no new data
+// queries, every widget renders from the existing /pricing/recommendations,
+// /menu, and /settings/pricing responses.
+
+export type PricingWidgetType =
+  | "recommendation_summary"
+  | "demand_trend_chart"
+  | "top_movers"
+  | "needs_review_list"
+  | "pricing_config_summary";
+
+export interface PricingWidget {
+  id: string;
+  type: PricingWidgetType;
+  title?: string;
+}
+
+export interface PricingDashboardConfig {
+  widgets: PricingWidget[];
+}
+
+// ---------- Business units (branches/regions) ----------
+// A tenant-configurable named list, used purely as a tag/filter on customers
+// and menu items — not real sub-tenants. One customer pool, one menu, one
+// segment/campaign engine; a business unit id is just a label attached to
+// records (profiles via traits.businessUnitId, events via the existing
+// location_id column, menu items via businessUnitIds, invoices via
+// business_unit_id).
+
+export interface BusinessUnit {
+  id: string;
+  name: string;
+}
+
+export interface BusinessUnitsConfig {
+  /** Master switch — a tenant can configure units and still keep the whole feature off. */
+  enabled: boolean;
+  units: BusinessUnit[];
 }
 
 export interface TenantConfig {
@@ -234,6 +280,10 @@ export interface TenantConfig {
   pricingConfig?: PricingConfig;
   /** Optional — defaults applied in code when absent (see personalizationDashboardConfig()). */
   personalizationDashboard?: PersonalizationDashboardConfig;
+  /** Optional — defaults applied in code when absent (see pricingDashboardConfig()). */
+  pricingDashboard?: PricingDashboardConfig;
+  /** Optional — defaults applied in code when absent (see businessUnitsConfig()). */
+  businessUnits?: BusinessUnitsConfig;
 }
 
 /** Loyalty settings with defaults for tenants configured before the feature existed. */
@@ -274,6 +324,7 @@ export function pricingConfig(config: TenantConfig): PricingConfig {
       defaultMaxChangePercent: 15,
       roundingRule: "none",
       safetyNetEnabled: true,
+      useBusinessUnitsInPricing: false,
       items: {},
     }
   );
@@ -289,6 +340,23 @@ const DEFAULT_PERSONALIZATION_WIDGETS: PersonalizationWidget[] = [
 /** Personalization dashboard widgets, defaulting to a sensible starter set. */
 export function personalizationDashboardConfig(config: TenantConfig): PersonalizationDashboardConfig {
   return config.personalizationDashboard ?? { widgets: DEFAULT_PERSONALIZATION_WIDGETS };
+}
+
+/** Business units (branches) with defaults for tenants who haven't configured any yet. */
+export function businessUnitsConfig(config: TenantConfig): BusinessUnitsConfig {
+  return config.businessUnits ?? { enabled: false, units: [] };
+}
+
+const DEFAULT_PRICING_WIDGETS: PricingWidget[] = [
+  { id: "default-recommendation-summary", type: "recommendation_summary" },
+  { id: "default-demand-trend-chart", type: "demand_trend_chart" },
+  { id: "default-top-movers", type: "top_movers" },
+  { id: "default-needs-review", type: "needs_review_list" },
+];
+
+/** Pricing dashboard widgets, defaulting to a sensible starter set. */
+export function pricingDashboardConfig(config: TenantConfig): PricingDashboardConfig {
+  return config.pricingDashboard ?? { widgets: DEFAULT_PRICING_WIDGETS };
 }
 
 export interface Tenant {
@@ -543,6 +611,10 @@ export interface MenuItem {
   gstRate: number | null;
   /** Falls back to billingProfile.defaultHsnCode on invoices when unset. */
   hsnCode: string | null;
+  /** Business unit ids this item is sold at. Empty = every branch. */
+  businessUnitIds: string[];
+  /** Data URI (small shop catalogs only — no external object storage). */
+  imageUrl: string | null;
   createdAt: Date;
 }
 
@@ -568,6 +640,7 @@ export interface Invoice {
   profileId: string | null;
   customerName: string | null;
   customerPhone: string | null;
+  businessUnitId: string | null;
   lineItems: InvoiceLineItem[];
   taxableAmount: number;
   cgstAmount: number;
@@ -605,7 +678,19 @@ export interface PriceRecommendation {
   rationale: string | null;
   /** True when thin data or hitting its min/max bound means this should be reviewed before applying. */
   needsReview: boolean;
+  /** "" = all branches (tenant-wide); otherwise scoped to one business unit's own sales. */
+  businessUnitId: string;
   computedAt: Date;
+}
+
+// ---------- Platform notifications ----------
+
+/** Platform-wide announcement (e.g. server maintenance) — not tenant-scoped. */
+export interface PlatformNotification {
+  id: string;
+  message: string;
+  severity: "info" | "warning" | "critical";
+  createdAt: Date;
 }
 
 // ---------- Loyalty ----------

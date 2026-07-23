@@ -7,6 +7,13 @@ import { useCallback, useEffect, useState } from "react";
 import AppShell from "../../components/AppShell";
 import { api, downloadFile } from "../../lib/api";
 
+interface SegmentItem {
+  id: string;
+  name: string;
+  campaignType: string;
+  audienceSize: number;
+}
+
 interface CampaignItem {
   id: string;
   status: string;
@@ -47,9 +54,12 @@ const TYPE_LABEL: Record<string, string> = {
 export default function CampaignsPage() {
   const [campaigns, setCampaigns] = useState<CampaignItem[] | null>(null);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [busyId, setBusyId] = useState("");
   const [editingId, setEditingId] = useState("");
   const [draft, setDraft] = useState("");
+  const [creatorOpen, setCreatorOpen] = useState(false);
+  const [segments, setSegments] = useState<SegmentItem[] | null>(null);
 
   const load = useCallback(() => {
     api<{ campaigns: CampaignItem[] }>("/campaigns")
@@ -58,6 +68,38 @@ export default function CampaignsPage() {
   }, []);
 
   useEffect(load, [load]);
+
+  function openCreator() {
+    setCreatorOpen((o) => !o);
+    if (!segments) {
+      api<{ segments: SegmentItem[] }>("/segments")
+        .then((r) => setSegments(r.segments))
+        .catch(() => setSegments([]));
+    }
+  }
+
+  async function createFromSegment(segment: SegmentItem) {
+    setBusyId(segment.id);
+    setError("");
+    setNotice("");
+    try {
+      const r = await api<{ result: { outcome: string; reason?: string; audienceSize?: number } }>(
+        `/segments/${segment.id}/run`,
+        { method: "POST" }
+      );
+      setNotice(
+        r.result.outcome === "campaign_created"
+          ? `Campaign created for "${segment.name}" (${r.result.audienceSize} customers) — see it below.`
+          : `Nothing created for "${segment.name}": ${r.result.reason}.`
+      );
+      setCreatorOpen(false);
+      load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusyId("");
+    }
+  }
 
   async function act(id: string, action: "approve" | "reject") {
     setBusyId(id);
@@ -94,11 +136,50 @@ export default function CampaignsPage() {
 
   return (
     <AppShell>
-      <div className="page-title">Campaigns</div>
-      <div className="page-sub">
-        Messages wait here for your OK. Nothing is sent until you approve it.
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+        <div>
+          <div className="page-title">Campaigns</div>
+          <div className="page-sub">
+            Messages wait here for your OK. Nothing is sent until you approve it.
+          </div>
+        </div>
+        <div style={{ position: "relative" }}>
+          <button className="btn btn-primary" onClick={openCreator}>
+            {creatorOpen ? "Close" : "+ Create Campaign"}
+          </button>
+          {creatorOpen && (
+            <div className="card" style={{ position: "absolute", right: 0, top: 44, zIndex: 10, width: 320, padding: 10 }}>
+              <div className="muted" style={{ fontSize: "0.85rem", padding: "4px 8px 10px" }}>
+                Pick a segment to turn into a campaign right now.
+              </div>
+              {!segments ? (
+                <div className="muted" style={{ padding: "0 8px" }}>Loading…</div>
+              ) : segments.length === 0 ? (
+                <div className="muted" style={{ padding: "0 8px" }}>
+                  No segments yet — <a href="/segments">create one first</a>.
+                </div>
+              ) : (
+                segments.map((s) => (
+                  <div
+                    key={s.id}
+                    onClick={() => (busyId ? undefined : createFromSegment(s))}
+                    style={{ padding: "8px 8px", borderRadius: 8, cursor: busyId ? "default" : "pointer", opacity: busyId && busyId !== s.id ? 0.5 : 1 }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg)")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                  >
+                    <div style={{ fontWeight: 600 }}>{busyId === s.id ? "Creating…" : s.name}</div>
+                    <div className="muted" style={{ fontSize: "0.8rem" }}>
+                      {TYPE_LABEL[s.campaignType] ?? s.campaignType} · {s.audienceSize} customers today
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
       </div>
       {error && <div className="error-text">{error}</div>}
+      {notice && <div className="notice">{notice}</div>}
       {!campaigns ? (
         <div className="muted">Loading…</div>
       ) : (

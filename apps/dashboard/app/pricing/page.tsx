@@ -7,6 +7,7 @@
 import { useEffect, useState } from "react";
 import AppShell from "../../components/AppShell";
 import { api } from "../../lib/api";
+import { useBusinessUnits } from "../../lib/businessUnits";
 import PricingLocked from "./locked";
 
 interface Recommendation {
@@ -41,13 +42,26 @@ export default function PricingRecommendationsPage() {
   const [locked, setLocked] = useState(false);
   const [reviewed, setReviewed] = useState<Record<string, boolean>>({});
   const [notice, setNotice] = useState("");
+  const { units: businessUnits, active: businessUnitsActive } = useBusinessUnits();
+  const [businessUnitId, setBusinessUnitId] = useState("");
+  const [businessUnitsInPricing, setBusinessUnitsInPricing] = useState(false);
+  const showBranchSelector = businessUnitsActive && businessUnitsInPricing;
+
+  useEffect(() => {
+    api<{ pricing: { useBusinessUnitsInPricing?: boolean } }>("/settings/pricing")
+      .then((r) => setBusinessUnitsInPricing(Boolean(r.pricing.useBusinessUnitsInPricing)))
+      .catch(() => setBusinessUnitsInPricing(false));
+  }, []);
 
   useEffect(() => {
     loadRecommendations();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [businessUnitId]);
 
   function loadRecommendations() {
-    api<{ recommendations: Recommendation[] }>("/pricing/recommendations")
+    const params = new URLSearchParams();
+    if (businessUnitId) params.set("businessUnitId", businessUnitId);
+    api<{ recommendations: Recommendation[] }>(`/pricing/recommendations${params.toString() ? `?${params.toString()}` : ""}`)
       .then((r) => setRecommendations(r.recommendations))
       .catch((e: Error & { status?: number }) => {
         if (e.status === 403) setLocked(true);
@@ -59,7 +73,10 @@ export default function PricingRecommendationsPage() {
     setRefreshing(true);
     setError("");
     try {
-      const r = await api<{ recommendations: Recommendation[] }>("/pricing/refresh", { method: "POST" });
+      const r = await api<{ recommendations: Recommendation[] }>("/pricing/refresh", {
+        method: "POST",
+        body: JSON.stringify(businessUnitId ? { businessUnitId } : {}),
+      });
       setRecommendations(r.recommendations);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -76,7 +93,9 @@ export default function PricingRecommendationsPage() {
       const result = await api<{ applied: number; skippedNeedsReview: number }>("/pricing/apply", {
         method: "POST",
         body: JSON.stringify(
-          menuItemId ? { menuItemId, confirmReview: Boolean(reviewed[menuItemId]) } : { all: true }
+          menuItemId
+            ? { menuItemId, confirmReview: Boolean(reviewed[menuItemId]), businessUnitId: businessUnitId || undefined }
+            : { all: true, businessUnitId: businessUnitId || undefined }
         ),
       });
       if (!menuItemId && result.skippedNeedsReview > 0) {
@@ -115,14 +134,30 @@ export default function PricingRecommendationsPage() {
       <div className="page-sub">
         Bounded, explainable price suggestions from your own sales history — nothing changes until you apply it.
         Pick which items to optimize and set bounds under <a href="/pricing/settings">Item Settings</a>.
+        {showBranchSelector && (
+          <>
+            {" "}Optimizing for <strong>{businessUnitId ? businessUnits.find((u) => u.id === businessUnitId)?.name : "all branches"}</strong> —
+            a branch-scoped refresh only uses that branch's own sales and applying only changes that branch's price.
+          </>
+        )}
       </div>
       {error && <div className="error-text" style={{ marginBottom: 16 }}>{error}</div>}
       {notice && <div className="notice">{notice}</div>}
 
       <div className="card">
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
           <div className="section-title" style={{ marginBottom: 0 }}>Recommendations</div>
-          <div style={{ display: "flex", gap: 10 }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+            {showBranchSelector && (
+              <select value={businessUnitId} onChange={(e) => setBusinessUnitId(e.target.value)} style={{ width: 180 }}>
+                <option value="">All branches</option>
+                {businessUnits.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.name}
+                  </option>
+                ))}
+              </select>
+            )}
             {recommendations.length > 0 && (
               <button className="btn btn-ghost" disabled={applying !== null} onClick={() => apply()}>
                 {applying === "all" ? "Applying…" : "Apply all"}

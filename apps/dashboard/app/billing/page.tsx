@@ -7,6 +7,7 @@
 import { useEffect, useState } from "react";
 import AppShell from "../../components/AppShell";
 import { api } from "../../lib/api";
+import { useBusinessUnits } from "../../lib/businessUnits";
 
 interface MenuItem {
   id: string;
@@ -16,6 +17,7 @@ interface MenuItem {
   available: boolean;
   gstRate: number | null;
   hsnCode: string | null;
+  branchPrice: number | null;
 }
 
 interface BillingProfile {
@@ -66,6 +68,8 @@ export default function BillingPage() {
   const [countryCode, setCountryCode] = useState("+91");
   const [phone, setPhone] = useState("");
   const [name, setName] = useState("");
+  const { units: businessUnits, active: businessUnitsActive } = useBusinessUnits();
+  const [businessUnitId, setBusinessUnitId] = useState("");
   const [itemQty, setItemQty] = useState<Record<string, number>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -78,9 +82,14 @@ export default function BillingPage() {
   const [employeeId, setEmployeeId] = useState("");
 
   useEffect(() => {
-    api<{ items: MenuItem[] }>("/menu")
+    const params = new URLSearchParams();
+    if (businessUnitId) params.set("businessUnitId", businessUnitId);
+    api<{ items: MenuItem[] }>(`/menu${params.toString() ? `?${params.toString()}` : ""}`)
       .then((r) => setMenuItems(r.items.filter((it) => it.available)))
       .catch(() => setMenuItems([]));
+  }, [businessUnitId]);
+
+  useEffect(() => {
     api<{ billingProfile: BillingProfile }>("/settings/billing")
       .then((r) => setBillingProfile(r.billingProfile))
       .catch(() => setBillingProfile({}));
@@ -99,7 +108,7 @@ export default function BillingPage() {
       name: it.name,
       category: it.category,
       qty: itemQty[it.id],
-      unitPrice: it.price,
+      unitPrice: it.branchPrice ?? it.price,
       gstRate: it.gstRate ?? billingProfile?.defaultGstRate ?? 0,
     }));
   const rawTaxable = selectedItems.reduce((sum, it) => sum + it.qty * it.unitPrice, 0);
@@ -130,6 +139,7 @@ export default function BillingPage() {
         body: JSON.stringify({
           phone: `${countryCode}${phone.trim()}`,
           name: name.trim() || undefined,
+          businessUnitId: businessUnitId || undefined,
           items: selectedItems.map(({ name, category, qty, unitPrice }) => ({ name, category, qty, unitPrice })),
           discount:
             discountOn && discountNum > 0
@@ -145,6 +155,7 @@ export default function BillingPage() {
       setLastInvoice(result);
       setPhone("");
       setName("");
+      setBusinessUnitId("");
       setItemQty({});
       setDiscountOn(false);
       setDiscountValue("");
@@ -196,6 +207,16 @@ export default function BillingPage() {
             placeholder="Customer name (optional)"
             style={{ maxWidth: 220 }}
           />
+          {businessUnitsActive && (
+            <select value={businessUnitId} onChange={(e) => setBusinessUnitId(e.target.value)} style={{ width: 180 }}>
+              <option value="">No branch</option>
+              {businessUnits.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
 
         {menuItems.length > 0 ? (
@@ -221,7 +242,12 @@ export default function BillingPage() {
                   style={{ display: "flex", alignItems: "center", gap: 6, padding: "4px 8px", border: "1px solid var(--border, #e2e2e2)", borderRadius: 6 }}
                 >
                   <span style={{ fontSize: "0.85rem" }}>
-                    {it.name} <span className="muted">₹{it.price} · {it.gstRate ?? billingProfile?.defaultGstRate ?? 0}% GST</span>
+                    {it.name}{" "}
+                    <span className="muted">
+                      ₹{it.branchPrice ?? it.price}
+                      {it.branchPrice !== null && it.branchPrice !== it.price ? ` (base ₹${it.price})` : ""} ·{" "}
+                      {it.gstRate ?? billingProfile?.defaultGstRate ?? 0}% GST
+                    </span>
                   </span>
                   <input
                     type="number"

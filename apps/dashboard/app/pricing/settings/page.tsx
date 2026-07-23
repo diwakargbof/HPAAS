@@ -7,7 +7,9 @@
 
 import { useEffect, useState } from "react";
 import AppShell from "../../../components/AppShell";
+import BusinessUnitsCard from "../../../components/BusinessUnitsCard";
 import { api, getSession } from "../../../lib/api";
+import { useBusinessUnits } from "../../../lib/businessUnits";
 import PricingLocked from "../locked";
 
 interface MenuItem {
@@ -25,6 +27,7 @@ interface PricingItemConfig {
   minPrice?: number;
   maxPrice?: number;
   maxChangePercent?: number;
+  manualOverride?: boolean;
 }
 
 interface PricingConfig {
@@ -33,6 +36,7 @@ interface PricingConfig {
   occasion?: string;
   roundingRule?: RoundingRule;
   safetyNetEnabled?: boolean;
+  useBusinessUnitsInPricing?: boolean;
   items: Record<string, PricingItemConfig>;
 }
 
@@ -51,6 +55,7 @@ export default function PricingSettingsPage() {
   const [error, setError] = useState("");
   const [locked, setLocked] = useState(false);
   const festivals = getSession()?.tenant.config.festivals ?? [];
+  const { active: businessUnitsActive } = useBusinessUnits();
 
   useEffect(() => {
     api<{ items: MenuItem[] }>("/menu")
@@ -154,6 +159,31 @@ export default function PricingSettingsPage() {
             applied without an explicit confirmation.
           </div>
         </div>
+
+        {businessUnitsActive && (
+          <div className="card">
+            <div className="section-title">Business Units in Pricing</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 12 }}>
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={config.useBusinessUnitsInPricing ?? false}
+                  onChange={(e) => saveConfig({ ...config, useBusinessUnitsInPricing: e.target.checked })}
+                />
+                <span className="slider" />
+              </label>
+              <span>Optimize per branch</span>
+            </div>
+            <div className="muted" style={{ fontSize: "0.9rem" }}>
+              On: Recommendations gets a branch selector — refresh and apply are scoped to one
+              branch's own sales and price, so a slow branch never drags a fast one's price
+              around. Off: pricing ignores Business Units entirely and always optimizes across
+              all branches, exactly like a tenant with no Business Units configured.
+            </div>
+          </div>
+        )}
+
+        <BusinessUnitsCard />
       </div>
 
       <div className="card">
@@ -213,11 +243,13 @@ export default function PricingSettingsPage() {
                 <th className="num">Min ₹</th>
                 <th className="num">Max ₹</th>
                 <th className="num">Max change %</th>
+                <th>Manual pricing</th>
               </tr>
             </thead>
             <tbody>
               {menuItems.map((item) => {
                 const ic = config.items[item.id];
+                const manual = Boolean(ic?.manualOverride);
                 return (
                   <tr key={item.id}>
                     <td>
@@ -233,18 +265,20 @@ export default function PricingSettingsPage() {
                       <input
                         type="number"
                         min={0}
+                        disabled={manual}
                         value={ic?.minPrice ?? ""}
                         onChange={(e) => setItemConfig(item.id, { minPrice: e.target.value ? Number(e.target.value) : undefined })}
-                        style={{ width: 80 }}
+                        style={{ width: 80, opacity: manual ? 0.5 : 1 }}
                       />
                     </td>
                     <td className="num">
                       <input
                         type="number"
                         min={0}
+                        disabled={manual}
                         value={ic?.maxPrice ?? ""}
                         onChange={(e) => setItemConfig(item.id, { maxPrice: e.target.value ? Number(e.target.value) : undefined })}
-                        style={{ width: 80 }}
+                        style={{ width: 80, opacity: manual ? 0.5 : 1 }}
                       />
                     </td>
                     <td className="num">
@@ -252,12 +286,23 @@ export default function PricingSettingsPage() {
                         type="number"
                         min={0}
                         max={100}
+                        disabled={manual}
                         value={ic?.maxChangePercent ?? ""}
                         onChange={(e) =>
                           setItemConfig(item.id, { maxChangePercent: e.target.value ? Number(e.target.value) : undefined })
                         }
-                        style={{ width: 70 }}
+                        style={{ width: 70, opacity: manual ? 0.5 : 1 }}
                       />
+                    </td>
+                    <td>
+                      <label className="toggle">
+                        <input
+                          type="checkbox"
+                          checked={manual}
+                          onChange={(e) => setItemConfig(item.id, { manualOverride: e.target.checked })}
+                        />
+                        <span className="slider" />
+                      </label>
                     </td>
                   </tr>
                 );
@@ -265,6 +310,10 @@ export default function PricingSettingsPage() {
             </tbody>
           </table>
         )}
+        <div className="muted" style={{ fontSize: "0.85rem", marginTop: 10 }}>
+          Manual pricing skips AI recommendations for that item — set its price yourself on{" "}
+          <a href="/menu">Master Data</a>.
+        </div>
       </div>
     </AppShell>
   );

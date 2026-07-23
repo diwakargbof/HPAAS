@@ -348,11 +348,31 @@ graph TD
   (cold-start). Constrains recommendations to sellable items; feeds new-item names to copy.
   Each item optionally carries `hsnCode`/`gstRate` (nullable — falls back to the tenant's
   `billingProfile.defaultHsnCode`/`defaultGstRate` at invoice time, see `gst-billing`).
+  Reachable from the dashboard as Pricing's "Master Data" (`/menu`, same route, just
+  relabeled/relocated in nav — see `dashboard-app`). `GET /menu/export.csv` exports every
+  item joined with its current `ai-pricing` recommendation (blank columns if none yet);
+  `POST /menu/import` (multipart, `multer` memory storage same as `ingest.ts`'s
+  `POST /uploads`) bulk-upserts from a CSV via the existing dependency-free `parseCsv`
+  (`packages/core/src/csv.ts`) and `upsertMenuItem`. `PATCH /menu/:id` is a general field
+  edit (name/category/price/gstRate/hsnCode/businessUnitIds) — used for inline edits on
+  Master Data, distinct from the narrower `PATCH /menu/:id/availability`.
+  **Item photos**: `image_url` column (migration `011_menu_item_images.sql`) stores a data
+  URI — small shop catalogs, no external object storage needed. `POST /menu/:id/image`
+  (multipart, 800KB limit) uploads/replaces; `DELETE /menu/:id/image` clears it.
+  **Business unit tags**: `business_unit_ids` JSONB column (migration
+  `010_business_units.sql`) — which branches (see `business-units`) sell this item; empty
+  means every branch. `GET /menu?businessUnitId=` filters to items tagged to that branch (or
+  untagged) and, when given, also returns each item's `branchPrice` (see `business-units`'
+  per-branch price override). **Print labels**: `/menu/labels?ids=<comma-separated>` is a
+  bare (no `AppShell`) printable price-tag sheet for selected items — no backend beyond
+  `GET /menu`, just `@media print` CSS and the browser's print dialog.
   *Files:* `packages/core/src/menu.ts`, `apps/api/src/routes/menu.ts`,
-  `apps/dashboard/app/menu/page.tsx`, repos in `packages/db/src/repos-ai.ts`.
-  *Depends on:* `db-layer`. *Used by:* `counter-recommendations`, `ai-campaign-copy`,
-  `tenant-onboarding`, `qr-order-capture` (dashboard item picker for QR orders),
-  `gst-billing` (per-item tax rate/HSN).
+  `apps/dashboard/app/menu/{page,labels/page}.tsx`, repos in `packages/db/src/repos-ai.ts`,
+  migrations `010_business_units.sql`, `011_menu_item_images.sql`.
+  *Depends on:* `db-layer`, `business-units` (tags + branch price). *Used by:*
+  `counter-recommendations`, `ai-campaign-copy`, `tenant-onboarding`, `qr-order-capture`
+  (dashboard item picker for QR orders), `gst-billing` (per-item tax rate/HSN, branch
+  price), `ai-pricing` (per-item tax rate/HSN, current/branch price).
 
 - **`gst-billing`** — Tenant-invoked GST tax invoice generation. The tenant fills in their own
   business/GST details once (`Settings → Billing`, linked from the `/settings` hub page,
@@ -383,6 +403,13 @@ graph TD
   no anonymous discounting. Stored on the invoice row (`discount_type`, `discount_value`,
   `discount_amount`, `authorized_by_name`, `authorized_by_id`, migration
   `006_invoice_discounts.sql`) and shown on the printable invoice.
+  **Business unit tagging**: the Billing form's optional branch selector (shown only when
+  `business-units` is active) is threaded through to three places on invoice creation —
+  `profiles.traits.businessUnitId` (via `upsertProfile`'s JSONB merge), `events.location_id`
+  (via `ingestNormalizedEvents`, reusing that pre-existing column), and
+  `invoices.business_unit_id` (migration `010_business_units.sql`). Item unit prices default
+  to that branch's price override when one exists (`GET /menu?businessUnitId=`'s
+  `branchPrice`), falling back to the base price.
   **Deliberate scope limits** (see the migration's header comment for the full list):
   intra-state supply only (CGST+SGST split, no IGST/place-of-supply — this product has no
   notion of a customer's billing state, being a physical-counter/QR-pickup flow, not shipped
@@ -438,13 +465,48 @@ graph TD
   for campaigns, extended to the safety net specifically.
   **Deliberate scope limit**: this is a bounded demand-trend heuristic, not an econometric
   price-elasticity model — a small shop's transaction volume can't support one.
+  **Manual override**: a per-item `PricingItemConfig.manualOverride` flag (Item Settings)
+  excludes that item from refresh entirely regardless of `enabled`/`applyToAllItems` — the
+  tenant sets its price by hand on Master Data instead of letting the algorithm touch it.
+  **Per-branch optimization**: gated by its own second switch,
+  `PricingConfig.useBusinessUnitsInPricing` (default `false`, toggled in a "Business Units in
+  Pricing" card on Item Settings, shown only when `business-units` is active) — a tenant can
+  have Business Units on everywhere else and still keep pricing tenant-wide-only, or turn
+  this on specifically. Enforced server-side, not just hidden client-side: every
+  `pricing.ts` route re-checks `config.useBusinessUnitsInPricing` before honoring a
+  `businessUnitId` from the request. When on, Recommendations has a branch selector ("All
+  branches" or one specific unit). A branch-scoped refresh restricts targets
+  to items sold at that branch (empty `businessUnitIds` = sold everywhere) and computes the
+  demand signal from `tenantItemSalesByName(tenantId, businessUnitId)` — filtered to that
+  branch's own `events.location_id` — instead of tenant-wide sales, so one branch's
+  performance never drags another branch's price. `currentPrice` fed into the heuristic is
+  that branch's effective price (override or base). Recommendations are keyed by
+  `(tenant_id, menu_item_id, business_unit_id)` — `''` means "all branches" (migration
+  `012_branch_pricing.sql`; `''` not `NULL`, since Postgres `UNIQUE` treats `NULL`s as
+  distinct from each other, which would break the upsert's `ON CONFLICT`). Applying a
+  branch-scoped recommendation writes to `menu_item_branch_prices` (same migration) — a
+  per-(item, branch) price override — instead of touching the shared `menu_items.price`;
+  applying an all-branches recommendation still updates the base price exactly as before.
+  Safety-net `needsReview`/`confirmReview` gating is unaffected by scope. **Out of scope**:
+  Counter recommendations and CSV export/import stay tenant-wide/base-price-only — branch
+  pricing is limited to Billing, Master Data, and Pricing Recommendations.
+  **Pricing Dashboard** (`/pricing/dashboard`) mirrors `personalization-dashboard`'s
+  configurable-widget-board pattern exactly — no new data queries, 5 widget types
+  (`recommendation_summary`, `demand_trend_chart`, `top_movers`, `needs_review_list`,
+  `pricing_config_summary`) rendered client-side from `GET /pricing/recommendations`,
+  `GET /menu`, and `GET /settings/pricing`; layout persists via
+  `GET/PUT /v1/app/settings/pricing-dashboard` (`PricingDashboardConfig`, same
+  optional-config + default-accessor idiom). Stays tenant-wide only — no branch dimension on
+  the dashboard, since Recommendations is where branch-scoped work happens.
   *Files:* `packages/core/src/pricing.ts`, `packages/ai/src/{provider,anthropic-provider,mock-provider,index}.ts`,
   `packages/db/src/repos-pricing.ts`, `packages/jobs/src/pricing.ts`,
-  `apps/api/src/routes/pricing.ts`, `apps/dashboard/app/pricing/{page,locked}.tsx`
-  (Recommendations) + `apps/dashboard/app/pricing/settings/page.tsx` (Item Settings — now a
-  card grid: Rounding Rule, Safety Net, Item Bounds), migrations `007_pricing.sql`,
-  `008_pricing_safety_net.sql`.
-  *Depends on:* `menu-catalog` (items + prices), `ingestion` (events.items sales history),
+  `apps/api/src/routes/pricing.ts`, `apps/dashboard/app/pricing/{page,locked,dashboard/page}.tsx`
+  (Recommendations + Dashboard) + `apps/dashboard/app/pricing/settings/page.tsx` (Item
+  Settings — card grid: Rounding Rule, Safety Net, Business Units, Item Bounds with a Manual
+  Pricing column), migrations `007_pricing.sql`, `008_pricing_safety_net.sql`,
+  `012_branch_pricing.sql`.
+  *Depends on:* `menu-catalog` (items + prices + branch tags), `business-units`
+  (branch-scoped signal + price overrides), `ingestion` (events.items sales history),
   `db-layer`. *Used by:* `dashboard-app`.
   *Enabled for:* `dadus` (demo tenant) only, as of this writing — every other tenant sees the
   nav group locked (🔒) as an upsell until you explicitly add
@@ -452,17 +514,19 @@ graph TD
 
 - **`personalization-dashboard`** — A tenant-configurable widget board at
   `/personalization/dashboard`, the first entry in the Personalization nav group. Reuses
-  **existing** computed data — no new backend queries — via a small catalog of 5 widget
-  types: `customer_stats`/`repeat_trend`/`segment_sizes`/`top_customers` (all sourced from
-  the already-existing `GET /insights`) and `campaign_ab_compare` (sourced from `GET
-  /campaigns`, which already returns each sent campaign's `.attribution` — messaged vs.
-  hold-out control — from `computeAttribution`; the widget just re-renders that as an A/B
-  card, defaulting to the most recently sent campaign if the widget has no
-  `config.campaignId` set). The tenant adds/removes/reorders widgets from a picker; the
-  chosen list persists via `GET/PUT /v1/app/settings/personalization-dashboard`
+  **existing** computed data — no new backend queries — via a catalog of 6 widget
+  types: `customer_stats`/`repeat_trend`/`segment_sizes`/`top_customers`/`campaign_impact`
+  (all sourced from the already-existing `GET /insights` — `campaign_impact` reads its
+  `.impact` block: sent campaigns, incremental revenue, redemptions) and
+  `campaign_ab_compare` (sourced from `GET /campaigns`, which already returns each sent
+  campaign's `.attribution` — messaged vs. hold-out control — from `computeAttribution`; the
+  widget just re-renders that as an A/B card, defaulting to the most recently sent campaign
+  if the widget has no `config.campaignId` set). The tenant adds/removes/reorders widgets
+  from a picker; the chosen list persists via
+  `GET/PUT /v1/app/settings/personalization-dashboard`
   (`PersonalizationDashboardConfig` in `packages/types/src/index.ts`, same optional-config +
   default-accessor idiom as `pricingConfig` — defaults to a 4-widget starter set, everything
-  but `campaign_ab_compare`, since that one needs a specific campaign chosen).
+  but `campaign_ab_compare`/`campaign_impact`, since those need a sent campaign to exist).
   *Files:* `apps/dashboard/app/personalization/dashboard/page.tsx`, `settings/personalization-dashboard`
   routes in `apps/api/src/routes/app.ts`.
   *Depends on:* `dashboard-insights` (`GET /insights`), `approval-queue` (`GET /campaigns`,
@@ -470,14 +534,63 @@ graph TD
 
 - **`customer-directory`** — The full customer list (My Customers/`insights` only ever shows
   the top 8 by lifetime spend). `/customers` page: searchable by name/phone, sortable by
-  recency, lifetime spend, 90-day purchase count, or alphabetical — backed by
-  `listCustomers` (`packages/db/src/repos.ts`, a whitelisted sort-column map + `ILIKE` search,
+  recency, lifetime spend, 90-day purchase count, or alphabetical, and (when `business-units`
+  is active) filterable by branch — backed by `listCustomers` (`packages/db/src/repos.ts`, a
+  whitelisted sort-column map + `ILIKE` search + `traits->>'businessUnitId'` filter,
   `profiles LEFT JOIN features` so customers without computed features yet still show up)
-  and `GET /v1/app/customers?search=&sort=`. Linked from the My Customers page
-  ("View all customers →") and its own nav item.
+  and `GET /v1/app/customers?search=&sort=&businessUnitId=`. Linked from the My Customers page
+  ("View all customers →") and its own nav item. `GET /customers/export.csv` (all
+  customers) and `GET /segments/:id/export.csv` (one segment's audience — via
+  `audienceForSegment` + `getProfilesByIds`) export CSV, surfaced from
+  `/personalization/settings`'s Download Data card.
   *Files:* `packages/db/src/repos.ts` (`listCustomers`), `apps/api/src/routes/app.ts`
-  (`GET /customers`), `apps/dashboard/app/customers/page.tsx`.
-  *Depends on:* `feature-computation` (spend/frequency columns), `db-layer`.
+  (`GET /customers`, `GET /customers/export.csv`, `GET /segments/:id/export.csv`),
+  `apps/dashboard/app/customers/page.tsx`, `apps/dashboard/app/personalization/settings/page.tsx`.
+  *Depends on:* `feature-computation` (spend/frequency columns), `segment-rule-engine`
+  (segment export), `db-layer`.
+
+- **`platform-notifications`** — Platform-wide announcements (e.g. server maintenance
+  windows) shown to every tenant on `/personalization/notifications`. Deliberately **not**
+  tenant-scoped — the one exception to "every business-table query takes tenant_id", since
+  this is platform infrastructure content, not tenant business data. No authoring UI: post
+  one directly —
+  `INSERT INTO platform_notifications (message, severity) VALUES ('...', 'warning');`
+  (severity: `info`/`warning`/`critical`); set `active = false` to retire one.
+  *Files:* `packages/db/src/repos-notifications.ts`, `GET /notifications` in
+  `apps/api/src/routes/app.ts`, `apps/dashboard/app/personalization/notifications/page.tsx`,
+  migration `009_platform_notifications.sql`.
+  *Depends on:* `db-layer`. *Used by:* `dashboard-app`.
+
+- **`business-units`** — Branches/regions/counters as a **tag/filter dimension**, not real
+  sub-tenants: one shared customer pool, one menu, one segment/campaign engine. The named
+  list (`{id, name}[]`) lives in `tenants.config.businessUnits.units` (config-accessor idiom,
+  `businessUnitsConfig()`), managed identically from either area — a `BusinessUnitsCard`
+  component embedded in both `/personalization/settings` and `/pricing/settings`, both
+  hitting `GET/PUT /v1/app/settings/business-units`. **Master on/off switch**:
+  `businessUnits.enabled` (default `false`) lets a tenant configure branches and still keep
+  the whole feature invisible everywhere until they flip it on — every consuming page reads
+  `{ enabled, units }` via the shared `useBusinessUnits()` hook
+  (`apps/dashboard/lib/businessUnits.ts`) and gates its branch UI on `active` (`enabled &&
+  units.length > 0`), not just `units.length > 0`.
+  **Tagging paths**: customers via `profiles.traits.businessUnitId` (set on invoice
+  creation, merged by `upsertProfile`'s existing JSONB `||` merge — no migration needed);
+  purchases via the pre-existing `events.location_id` column (billing passes the selected
+  branch through as `locationId` on `ingestNormalizedEvents`); menu items via
+  `menu_items.business_unit_ids` JSONB (migration `010_business_units.sql`, empty = every
+  branch); invoices via `invoices.business_unit_id` (same migration).
+  **Per-branch pricing**: `menu_item_branch_prices` (migration `012_branch_pricing.sql`) —
+  a genuine price override per (item, branch), the one place business units affect something
+  more than a tag, since a shared item still has exactly one base price otherwise. See
+  `ai-pricing` for how refresh/apply use this, and `gst-billing` for how Billing defaults a
+  branch's effective price.
+  *Files:* `packages/types/src/index.ts` (`BusinessUnit`, `BusinessUnitsConfig`,
+  `businessUnitsConfig()`), `GET/PUT /settings/business-units` in
+  `apps/api/src/routes/app.ts`, `apps/dashboard/components/BusinessUnitsCard.tsx`,
+  `apps/dashboard/lib/businessUnits.ts`, migrations `010_business_units.sql`,
+  `012_branch_pricing.sql`.
+  *Depends on:* `db-layer`. *Used by:* `customer-directory` (filter), `gst-billing` (tag +
+  branch price default), `menu-catalog` (tags + branch price), `ai-pricing` (branch-scoped
+  refresh/apply).
 
 ## 8. Apps & operations
 
@@ -520,20 +633,39 @@ graph TD
   *Files:* `apps/api/api/cron/nightly.ts`, `maintenance.ts`, `_auth.ts`.
   *Depends on:* `scheduled-jobs`, `auth`.
 
-- **`dashboard-app`** — Next.js shop-owner app (:3000), tenant-themed. Sidebar nav has two
-  collapsible groups (`AppShell.tsx`'s `renderGroup`) alongside flat top-level links —
-  **Personalization** (`/personalization/dashboard` ← `personalization-dashboard`, always
-  first and not gated by its own module key, then `/insights`, `/customers`, `/segments`,
-  `/campaigns`, `/loyalty` — each of those still only shown when its own module is enabled)
-  and **Pricing** (`/pricing` Recommendations + `/pricing/settings` Item Settings — the
-  group itself is always shown, locked (🔒) when `modules.pricing` isn't enabled, so it
-  reads as an upsell rather than being invisible; see `ai-pricing`). Flat items: `/menu`, `/data` (uploads +
-  online-order QR desk ← `qr-order-capture`), `/preferences` (toggles + frequency cap +
-  receipt/coupon rules ← `coupon-engine`, `order-receipts`), `/settings` (WhatsApp status,
-  branding, API key, links to `/settings/billing`), `/billing` (Generate Bill ←
-  `gst-billing`). `/insights` (customer picture + impact ← `attribution`), `/customers`
-  (full searchable/sortable directory ← `customer-directory`), `/segments` (standard + AI
-  authoring/discovery).
+- **`dashboard-app`** — Next.js shop-owner app (:3000), tenant-themed. **Top bar** (not
+  sidebar) switches between exactly two areas — Personalization / Pricing — persisted to
+  `localStorage["hpas_active_area"]`; the "Pricing" tab shows 🔒 when `modules.pricing`
+  isn't enabled (an upsell, not a hide — see `ai-pricing`). The **sidebar shows only the
+  active area's full menu**, no collapsible groups:
+  - **Personalization**: `/personalization/dashboard` (← `personalization-dashboard`,
+    always first, not gated by its own module), `/insights` (customer picture + impact ←
+    `attribution`), `/customers` (full searchable/sortable directory, branch-filterable ←
+    `customer-directory`), `/segments` (standard + AI authoring/discovery, plus a top-right
+    "+ New Segment" button that reveals the describe/discover creator panel — collapsed by
+    default), `/campaigns` (approval queue, plus a top-right "+ Create Campaign" button —
+    a popover listing existing segments, each one-click-runnable into a campaign, so a
+    tenant doesn't have to leave Campaigns to make one), `/loyalty` (Counter),
+    `/personalization/qr-codes` (online-order QR desk ← `qr-order-capture`, moved out of
+    Upload Data into its own nav entry since it's a distinct workflow, not a CSV import),
+    `/data` (POS CSV upload + history only, now — links out to the QR page), `/preferences`
+    (toggles + frequency cap + receipt/coupon rules ← `coupon-engine`, `order-receipts`) —
+    each still only shown when its own module is enabled — then
+    `/personalization/notifications` (← `platform-notifications`) and
+    `/personalization/settings` (Master Data/Upload/Download + `business-units`'s
+    `BusinessUnitsCard` — always shown, not module-gated).
+  - **Pricing**: `/pricing/dashboard` (← `ai-pricing`'s Pricing Dashboard, first entry),
+    `/pricing` Recommendations, `/pricing/settings` Item Settings (all always shown once the
+    area is reachable), `/menu` relabeled "Master Data" (still gated by the `menu` module
+    flag, same as any other module-gated item — see `menu-catalog`).
+  - **Nav active-state**: longest-prefix match against `pathname`, not a plain
+    `startsWith` — `/pricing/settings` must only light up "Item Settings", not also
+    "Recommendations" (path `/pricing`, a prefix of it). Fixed after the flat-`startsWith`
+    version lit up both simultaneously.
+  - **Account** (tenant-wide, shown below the area menu regardless of which tab is
+    active — Settings/Billing don't belong to either area): `/settings` (WhatsApp status,
+    branding, API key, Version card, links to `/settings/billing`), `/billing` (Generate
+    Bill ← `gst-billing`).
   *Files:* `apps/dashboard/app/*/page.tsx`, `components/AppShell.tsx`, `lib/api.ts`.
   *Depends on:* `api-app` (via `lib/api.ts`), `auth`.
 

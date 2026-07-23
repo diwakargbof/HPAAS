@@ -373,7 +373,7 @@ const CUSTOMER_ORDER_BY: Record<CustomerSort, string> = {
 /** Every customer (not just the top-N), searchable by name/phone, sortable a few ways. */
 export async function listCustomers(
   tenantId: string,
-  opts: { search?: string; sort?: CustomerSort; limit?: number } = {}
+  opts: { search?: string; sort?: CustomerSort; limit?: number; businessUnitId?: string } = {}
 ): Promise<
   Array<
     Profile & {
@@ -394,9 +394,10 @@ export async function listCustomers(
      LEFT JOIN features f ON f.profile_id = p.id AND f.tenant_id = p.tenant_id
      WHERE p.tenant_id = $1
        AND ($2::text IS NULL OR p.phone ILIKE '%' || $2 || '%' OR (p.traits->>'name') ILIKE '%' || $2 || '%')
+       AND ($4::text IS NULL OR p.traits->>'businessUnitId' = $4)
      ORDER BY ${orderBy}
      LIMIT $3`,
-    [tenantId, search, limit]
+    [tenantId, search, limit, opts.businessUnitId ?? null]
   );
   return rows.map((r) => ({
     ...mapProfile(r),

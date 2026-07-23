@@ -20,7 +20,13 @@ import {
 import AppShell from "../../../components/AppShell";
 import { api, getSession } from "../../../lib/api";
 
-type WidgetType = "customer_stats" | "repeat_trend" | "segment_sizes" | "top_customers" | "campaign_ab_compare";
+type WidgetType =
+  | "customer_stats"
+  | "repeat_trend"
+  | "segment_sizes"
+  | "top_customers"
+  | "campaign_ab_compare"
+  | "campaign_impact";
 
 interface Widget {
   id: string;
@@ -38,6 +44,7 @@ interface Insights {
   segments: Array<{ id: string; name: string; campaignType: string; size: number }>;
   topCustomers: Array<{ name: string; phone: string; ltv: number; recencyDays: number; favoriteItem: string | null }>;
   repeatTrend: Array<{ month: string; buyers: number; repeatRate: number }>;
+  impact: { sentCampaigns: number; incrementalRevenue: number; redemptions: number };
 }
 
 interface AttributionReport {
@@ -64,6 +71,7 @@ const WIDGET_CATALOG: Array<{ type: WidgetType; label: string; description: stri
   { type: "segment_sizes", label: "Segment Sizes", description: "How many customers are in each segment" },
   { type: "top_customers", label: "Top Customers", description: "Your best customers by lifetime spend" },
   { type: "campaign_ab_compare", label: "Campaign A/B Compare", description: "Messaged vs. hold-out control for one sent campaign" },
+  { type: "campaign_impact", label: "Campaign Impact", description: "Sent campaigns, incremental revenue, and redemptions overall" },
 ];
 
 const WIDGET_LABEL: Record<WidgetType, string> = Object.fromEntries(
@@ -325,6 +333,32 @@ export default function PersonalizationDashboardPage() {
               </div>
             </div>
           )}
+        </div>
+      );
+    }
+
+    if (widget.type === "campaign_impact") {
+      if (!insights) return null;
+      return (
+        <div className="card" key={widget.id}>
+          <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
+            <div className="section-title" style={{ marginBottom: 0 }}>{title}</div>
+            {controls}
+          </div>
+          <div className="grid grid-4" style={{ marginBottom: 0 }}>
+            <div>
+              <div className="stat-label">Campaigns sent</div>
+              <div className="stat-value">{insights.impact.sentCampaigns}</div>
+            </div>
+            <div>
+              <div className="stat-label">Incremental revenue</div>
+              <div className="stat-value good-text">₹{insights.impact.incrementalRevenue.toLocaleString("en-IN")}</div>
+            </div>
+            <div>
+              <div className="stat-label">Redemptions</div>
+              <div className="stat-value">{insights.impact.redemptions}</div>
+            </div>
+          </div>
         </div>
       );
     }

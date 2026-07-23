@@ -98,6 +98,7 @@ billingRouter.post("/invoices", async (req, res) => {
 
   const phone = normalizePhone(String(req.body?.phone ?? ""));
   const name = String(req.body?.name ?? "").trim();
+  const businessUnitId = String(req.body?.businessUnitId ?? "").trim() || null;
   if (!phone) {
     res.status(400).json({ error: "valid phone is required" });
     return;
@@ -139,7 +140,10 @@ billingRouter.post("/invoices", async (req, res) => {
     authorizedById = employeeId;
   }
 
-  const profile = await upsertProfile(tenant.id, phone, name ? { name } : {});
+  const profile = await upsertProfile(tenant.id, phone, {
+    ...(name ? { name } : {}),
+    ...(businessUnitId ? { businessUnitId } : {}),
+  });
   const menuItems = await listMenuItems(tenant.id);
   let lineItems = computeInvoiceLines(items, tenant, menuItemsByName(menuItems));
 
@@ -157,6 +161,7 @@ billingRouter.post("/invoices", async (req, res) => {
       tenantId: tenant.id,
       phone,
       traits: name ? { name } : {},
+      locationId: businessUnitId ?? undefined,
       eventType: "purchase",
       items,
       amount: taxableAmount,
@@ -171,6 +176,7 @@ billingRouter.post("/invoices", async (req, res) => {
     profileId: profile.id,
     customerName: name || profile.traits.name || null,
     customerPhone: phone,
+    businessUnitId,
     lineItems,
     discountType,
     discountValue,

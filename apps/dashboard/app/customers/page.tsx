@@ -7,6 +7,7 @@
 import { useEffect, useState } from "react";
 import AppShell from "../../components/AppShell";
 import { api, getSession } from "../../lib/api";
+import { useBusinessUnits } from "../../lib/businessUnits";
 
 interface Customer {
   id: string;
@@ -37,18 +38,21 @@ export default function CustomersPage() {
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<(typeof SORTS)[number]["value"]>("recent");
+  const { units: businessUnits, active: businessUnitsActive } = useBusinessUnits();
+  const [businessUnitId, setBusinessUnitId] = useState("");
   const primary = getSession()?.tenant.config.branding.colors.primary ?? "#8b4513";
 
   useEffect(() => {
     const handle = setTimeout(() => {
       const params = new URLSearchParams({ sort });
       if (search.trim()) params.set("search", search.trim());
+      if (businessUnitId) params.set("businessUnitId", businessUnitId);
       api<{ customers: Customer[] }>(`/customers?${params.toString()}`)
         .then((r) => setCustomers(r.customers))
         .catch((e) => setError(String(e.message ?? e)));
     }, 250);
     return () => clearTimeout(handle);
-  }, [search, sort]);
+  }, [search, sort, businessUnitId]);
 
   return (
     <AppShell>
@@ -72,6 +76,16 @@ export default function CustomersPage() {
               </option>
             ))}
           </select>
+          {businessUnitsActive && (
+            <select value={businessUnitId} onChange={(e) => setBusinessUnitId(e.target.value)} style={{ width: 180 }}>
+              <option value="">All branches</option>
+              {businessUnits.map((u) => (
+                <option key={u.id} value={u.id}>
+                  {u.name}
+                </option>
+              ))}
+            </select>
+          )}
           {customers && (
             <span className="muted" style={{ marginLeft: "auto", fontSize: "0.9rem" }}>
               {customers.length} customer{customers.length === 1 ? "" : "s"}

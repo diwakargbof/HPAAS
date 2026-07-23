@@ -14,6 +14,7 @@ const mapInvoice = (r: any): Invoice => ({
   profileId: r.profile_id,
   customerName: r.customer_name,
   customerPhone: r.customer_phone,
+  businessUnitId: r.business_unit_id,
   lineItems: r.line_items ?? [],
   taxableAmount: Number(r.taxable_amount),
   cgstAmount: Number(r.cgst_amount),
@@ -35,6 +36,7 @@ export async function createInvoice(i: {
   profileId?: string | null;
   customerName?: string | null;
   customerPhone?: string | null;
+  businessUnitId?: string | null;
   lineItems: InvoiceLineItem[];
   discountType?: "percent" | "flat" | null;
   discountValue?: number;
@@ -64,9 +66,9 @@ export async function createInvoice(i: {
     const row = await client.query(
       `INSERT INTO invoices
          (tenant_id, token, invoice_number, profile_id, customer_name, customer_phone,
-          line_items, taxable_amount, cgst_amount, sgst_amount, total_amount,
+          business_unit_id, line_items, taxable_amount, cgst_amount, sgst_amount, total_amount,
           discount_type, discount_value, discount_amount, authorized_by_name, authorized_by_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
        RETURNING *`,
       [
         i.tenantId,
@@ -75,6 +77,7 @@ export async function createInvoice(i: {
         i.profileId ?? null,
         i.customerName ?? null,
         i.customerPhone ?? null,
+        i.businessUnitId ?? null,
         JSON.stringify(i.lineItems),
         taxableAmount,
         cgstAmount,

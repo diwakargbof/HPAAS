@@ -40,7 +40,55 @@ a {
 
 .shell {
   display: flex;
+  flex-direction: column;
   min-height: 100vh;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 28px;
+  padding: 0 24px;
+  height: 64px;
+  flex-shrink: 0;
+  background: var(--card);
+  border-bottom: 1px solid var(--line);
+}
+
+.topbar .brand {
+  padding: 0;
+}
+
+.area-tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.area-tab {
+  border: none;
+  background: transparent;
+  color: var(--ink-secondary);
+  font-weight: 650;
+  font-size: 0.95rem;
+  padding: 8px 16px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.area-tab:hover {
+  background: var(--bg);
+}
+
+.area-tab.active {
+  background: var(--primary);
+  color: #fff;
+}
+
+.shell-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
 }
 
 .sidebar {
@@ -425,8 +473,14 @@ textarea {
 /* ---------- responsive ---------- */
 
 @media (max-width: 760px) {
-  .shell {
+  .shell-body {
     flex-direction: column;
+  }
+  .topbar {
+    height: auto;
+    flex-wrap: wrap;
+    padding: 10px 12px;
+    gap: 12px;
   }
   .sidebar {
     width: 100%;
@@ -434,9 +488,6 @@ textarea {
     align-items: center;
     overflow-x: auto;
     padding: 10px 12px;
-  }
-  .brand {
-    padding: 0 12px 0 0;
   }
   .sidebar .logout {
     margin-top: 0;

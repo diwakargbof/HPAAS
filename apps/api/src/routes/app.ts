@@ -18,6 +18,7 @@ import {
   getProfilesByIds,
   getSegment,
   getPreferences,
+  listActivePlatformNotifications,
   listCampaigns,
   listCustomers,
   listSegments,
@@ -31,15 +32,26 @@ import {
 } from "@hpas/db";
 import {
   ALL_CAMPAIGN_TYPES,
+  businessUnitsConfig,
   couponConfig,
   personalizationDashboardConfig,
   qrCaptureConfig,
   receiptConfig,
+  type BusinessUnit,
   type CampaignType,
   type CouponTier,
   type PersonalizationWidget,
   type PersonalizationWidgetType,
 } from "@hpas/types";
+
+function csvField(value: unknown): string {
+  const s = value === null || value === undefined ? "" : String(value);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+
+function toCsv(headers: string[], rows: Array<Array<unknown>>): string {
+  return [headers, ...rows].map((row) => row.map(csvField).join(",")).join("\r\n");
+}
 
 const PERSONALIZATION_WIDGET_TYPES: PersonalizationWidgetType[] = [
   "customer_stats",
@@ -47,6 +59,7 @@ const PERSONALIZATION_WIDGET_TYPES: PersonalizationWidgetType[] = [
   "segment_sizes",
   "top_customers",
   "campaign_ab_compare",
+  "campaign_impact",
 ];
 
 export const appRouter: import("express").Router = Router();
@@ -118,7 +131,8 @@ appRouter.get("/customers", async (req, res) => {
     ? (sortParam as (typeof CUSTOMER_SORTS)[number])
     : "recent";
 
-  const customers = await listCustomers(tenant.id, { search, sort, limit: 500 });
+  const businessUnitId = typeof req.query.businessUnitId === "string" ? req.query.businessUnitId : undefined;
+  const customers = await listCustomers(tenant.id, { search, sort, limit: 500, businessUnitId });
   res.json({
     customers: customers.map((c) => ({
       id: c.id,
@@ -131,6 +145,57 @@ appRouter.get("/customers", async (req, res) => {
       joinedAt: c.createdAt,
     })),
   });
+});
+
+/** Personalization > Settings > Download Data: every customer as CSV. */
+appRouter.get("/customers/export.csv", async (req, res) => {
+  const tenant = req.tenant!;
+  const customers = await listCustomers(tenant.id, { sort: "recent", limit: 5000 });
+  const csv = toCsv(
+    ["name", "phone", "ltv", "purchases90d", "recencyDays", "favoriteItem", "joinedAt"],
+    customers.map((c) => [
+      typeof c.traits.name === "string" && c.traits.name ? c.traits.name : "Customer",
+      c.phone,
+      c.ltv ?? "",
+      c.purchases90d ?? "",
+      c.recencyDays ?? "",
+      c.favoriteItem ?? "",
+      c.createdAt,
+    ])
+  );
+  res.setHeader("Content-Type", "text/csv");
+  res.setHeader("Content-Disposition", `attachment; filename="customers.csv"`);
+  res.send(csv);
+});
+
+/** Personalization > Settings > Download Data: one segment's audience as CSV. */
+appRouter.get("/segments/:id/export.csv", async (req, res) => {
+  const tenant = req.tenant!;
+  const segment = await getSegment(tenant.id, req.params.id);
+  if (!segment) {
+    res.status(404).json({ error: "segment not found" });
+    return;
+  }
+  const features = await audienceForSegment(tenant, segment);
+  const profiles = await getProfilesByIds(tenant.id, features.map((f) => f.profileId));
+  const profileById = new Map(profiles.map((p) => [p.id, p]));
+  const csv = toCsv(
+    ["name", "phone", "recencyDays", "frequency90d", "monetaryLtv", "favoriteItem"],
+    features.map((f) => {
+      const profile = profileById.get(f.profileId);
+      const name = typeof profile?.traits.name === "string" && profile.traits.name ? profile.traits.name : "Customer";
+      return [name, profile?.phone ?? "", f.recencyDays, f.frequency90d, f.monetaryLtv, f.favoriteItem ?? ""];
+    })
+  );
+  res.setHeader("Content-Type", "text/csv");
+  res.setHeader("Content-Disposition", `attachment; filename="segment-${segment.name.replace(/[^a-z0-9]/gi, "-")}.csv"`);
+  res.send(csv);
+});
+
+// ---------- platform notifications ----------
+
+appRouter.get("/notifications", async (_req, res) => {
+  res.json({ notifications: await listActivePlatformNotifications() });
 });
 
 // ---------- campaigns (the approval queue) ----------
@@ -396,6 +461,30 @@ appRouter.put("/settings/personalization-dashboard", async (req, res) => {
 
   await patchTenantConfig(tenant.id, { personalizationDashboard: { widgets } });
   res.json({ dashboard: { widgets } });
+});
+
+// ---------- business units (branches/regions) ----------
+// A tag/filter dimension shared by Personalization and Pricing — managed
+// from either area's Settings page, both hitting this same pair of routes.
+
+appRouter.get("/settings/business-units", (req, res) => {
+  res.json(businessUnitsConfig(req.tenant!.config));
+});
+
+appRouter.put("/settings/business-units", async (req, res) => {
+  const tenant = req.tenant!;
+  const unitsBody = Array.isArray(req.body?.units) ? req.body.units : [];
+  const units: BusinessUnit[] = unitsBody
+    .map((u: Partial<BusinessUnit>) => ({
+      id: String(u.id ?? "").trim() || `bu-${Math.random().toString(36).slice(2, 10)}`,
+      name: String(u.name ?? "").trim(),
+    }))
+    .filter((u: BusinessUnit) => u.name.length > 0)
+    .slice(0, 50);
+  const enabled = Boolean(req.body?.enabled);
+
+  await patchTenantConfig(tenant.id, { businessUnits: { enabled, units } });
+  res.json({ enabled, units });
 });
 
 // ---------- settings ----------

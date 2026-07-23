@@ -64,6 +64,7 @@ export default function SegmentsPage() {
   const [discovering, setDiscovering] = useState(false);
   const [suggestions, setSuggestions] = useState<Proposal[] | null>(null);
   const [busy, setBusy] = useState("");
+  const [creatorOpen, setCreatorOpen] = useState(false);
 
   const load = useCallback(() => {
     api<{ segments: SegmentItem[] }>("/segments")
@@ -101,7 +102,10 @@ export default function SegmentsPage() {
       setNotice(`Saved "${p.name}" — it'll be checked by the daily campaign run, or create a campaign now below.`);
       setProposal(null);
       setSuggestions((s) => s?.filter((x) => x.name !== p.name) ?? null);
-      if (source === "custom") setPrompt("");
+      if (source === "custom") {
+        setPrompt("");
+        setCreatorOpen(false);
+      }
       load();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -175,38 +179,47 @@ export default function SegmentsPage() {
 
   return (
     <AppShell>
-      <div className="page-title">Segments</div>
-      <div className="page-sub">
-        Who gets which campaign. Describe an audience in your own words, or let AI study your sales and suggest one.
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12 }}>
+        <div>
+          <div className="page-title">Segments</div>
+          <div className="page-sub">
+            Who gets which campaign. Describe an audience in your own words, or let AI study your sales and suggest one.
+          </div>
+        </div>
+        <button className="btn btn-primary" onClick={() => setCreatorOpen((o) => !o)}>
+          {creatorOpen ? "Close" : "+ New Segment"}
+        </button>
       </div>
       {error && <div className="error-text" style={{ marginBottom: 12 }}>{error}</div>}
       {notice && <div className="notice">{notice}</div>}
 
-      <div className="grid grid-2">
-        <div className="card">
-          <div className="section-title">Describe a segment</div>
-          <textarea
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            placeholder='e.g. "big spenders who buy gift boxes but haven&apos;t visited in 2 months"'
-          />
-          <div style={{ marginTop: 10 }}>
-            <button className="btn btn-primary" disabled={previewing || !prompt.trim()} onClick={preview}>
-              {previewing ? "Thinking…" : "Preview audience"}
+      {creatorOpen && (
+        <div className="grid grid-2">
+          <div className="card">
+            <div className="section-title">Describe a segment</div>
+            <textarea
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              placeholder='e.g. "big spenders who buy gift boxes but haven&apos;t visited in 2 months"'
+            />
+            <div style={{ marginTop: 10 }}>
+              <button className="btn btn-primary" disabled={previewing || !prompt.trim()} onClick={preview}>
+                {previewing ? "Thinking…" : "Preview audience"}
+              </button>
+            </div>
+          </div>
+          <div className="card">
+            <div className="section-title">Let AI suggest segments</div>
+            <div className="muted" style={{ marginBottom: 10 }}>
+              Looks at your own numbers (visit gaps, spend, categories, festivals) and proposes audiences worth
+              messaging — with live sizes, nothing saved until you say so.
+            </div>
+            <button className="btn btn-ghost" disabled={discovering} onClick={discover}>
+              {discovering ? "Studying your sales…" : "Suggest segments"}
             </button>
           </div>
         </div>
-        <div className="card">
-          <div className="section-title">Let AI suggest segments</div>
-          <div className="muted" style={{ marginBottom: 10 }}>
-            Looks at your own numbers (visit gaps, spend, categories, festivals) and proposes audiences worth
-            messaging — with live sizes, nothing saved until you say so.
-          </div>
-          <button className="btn btn-ghost" disabled={discovering} onClick={discover}>
-            {discovering ? "Studying your sales…" : "Suggest segments"}
-          </button>
-        </div>
-      </div>
+      )}
 
       {proposal && proposalCard(proposal, "custom")}
       {suggestions && suggestions.length > 0 && (
