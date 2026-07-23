@@ -18,7 +18,8 @@ Personalization is everything about knowing your customers and talking to them w
 - Grouping customers into **segments** ("big spenders who haven't visited in 2 months").
 - Sending WhatsApp campaigns to those segments, with AI-written (but human-approved)
   message copy.
-- A cashier-facing **Counter** screen with per-customer recommendations and loyalty points.
+- A cashier-facing customer lookup built into **Billing** — per-customer recommendations and
+  loyalty points, right where you already type their phone number to bill them.
 - Receipts, coupons, and online-order capture that all feed the same customer pool.
 
 Nothing here ever sends a message without you clicking "Approve & Send" — the system only
@@ -277,19 +278,30 @@ Below that, **History** lists every past campaign with delivery/read/reply stats
 incremental revenue, and redemption counts, plus a **Call list** download for any campaign
 that routed high-value customers to a human phone call instead of a message.
 
-### 3.6 Counter (`/loyalty`) — requires `loyalty` module
+### 3.6 The counter card, on Billing (`/billing`)
 
-The cashier-facing lookup screen — meant to be pulled up on a phone or tablet at the
-counter mid-sale. Type a customer's phone number to see:
+There's no separate "Counter" page anymore — the cashier-facing lookup lives right on the
+**Billing** page (Account → Billing, or via the top-right area if you've bought Pricing),
+built into the same phone number field you already type when generating a bill. You never
+enter a customer's number twice.
 
-- Their name, loyalty point balance (and its rupee value), last visit.
+Type the phone number and tab/click away from the field (or it looks up automatically once
+you've filled it in) and, if that number is a customer, a card appears above the item picker
+showing:
+
+- Their name, loyalty point balance (and its rupee value), last visit, favorite item.
 - 2–3 recommended items to suggest, each with a one-line reason the cashier can say out
-  loud ("goes well with what they usually buy," "haven't tried this yet," etc.).
-- Buttons to **award/redeem loyalty points** and to send a quick **1:1 WhatsApp note**.
+  loud ("goes well with what they usually buy," "haven't tried this yet," etc.) and a
+  cashier-facing pitch line.
+- Buttons to **award/redeem loyalty points**, with a running log of the last few point
+  events, and a box to send a quick **1:1 WhatsApp note**.
 
-If the number isn't a customer yet, the page offers a **"new customer" form** instead —
-enter their name and (optionally) what they're buying right now, and it creates the
-customer and records that first purchase in one step, same as any other entry point.
+If the number isn't a customer yet, you'll see a **"new customer"** notice instead of the
+card — normally you don't need to do anything else: just fill in their name, pick what
+they're buying below, and hit **Generate Invoice**, which creates their profile and records
+that first purchase automatically. If they're *not* buying anything right now (e.g. you just
+want to enroll them), a small **"add them now without a bill"** button next to the notice
+does that directly, without going through the invoice form.
 
 ### 3.7 QR Codes (`/personalization/qr-codes`)
 
@@ -425,15 +437,17 @@ Campaigns → History → find the sent campaign → its row shows delivered/rea
 For the deeper comparison — messaged customers vs. the held-out control group — add a
 **Campaign A/B Compare** widget to your Dashboard (§3.1) and pick that campaign.
 
-**"A new cashier needs to use the Counter screen — what do they need to know?"**
-Just the customer's phone number. Counter (§3.6) handles everything else: existing customers
-show recommendations and loyalty balance automatically; a number that isn't a customer yet
-shows a one-field "new customer" form instead of an error.
+**"A new cashier needs to use Billing to handle a walk-in customer — what do they need to know?"**
+Just the customer's phone number, typed into the same field they'd use to bill the sale
+(§3.6). Existing customers show recommendations and loyalty balance automatically, right
+there on the page; a number that isn't a customer yet shows a "new customer" notice instead
+of an error, and generating the bill creates their profile and awards points in one step —
+no separate Counter screen to visit.
 
 **"I want to warn my team about a maintenance window."**
 You can't post these yourself — Notifications (§3.10) is a read-only feed from the platform
 operator (HPAS), not tenant-authored. If you need your *team* to know about something
-specific to your shop, use the Counter screen's 1:1 WhatsApp note feature per-customer, or
+specific to your shop, use Billing's 1:1 WhatsApp note feature per-customer (§3.6), or
 handle it outside the platform (this feed is specifically for platform-wide announcements).
 
 **"Can I get all my customer data out if I ever need to leave?"**

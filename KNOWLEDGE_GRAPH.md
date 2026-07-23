@@ -260,7 +260,7 @@ graph TD
   *Depends on:* `template-interpolation`, `channel-interface`, `whatsapp-adapter`,
   `call-list-channel`, `holdout-control`. *Used by:* `approval-queue`, `send-campaigns` job.
 
-- **`direct-messages`** — 1:1 note from the Counter page (owner → customer). Recorded in
+- **`direct-messages`** — 1:1 note from the counter card on Billing (owner → customer). Recorded in
   `direct_messages`, never in campaign messages — attribution and hold-out stay clean.
   *Files:* `packages/channels/src/direct.ts`, route in `apps/api/src/routes/counter.ts`.
   *Depends on:* `whatsapp-adapter`, `phone-normalization`. *Used by:* `counter-card` page/API.
@@ -323,18 +323,24 @@ graph TD
   *Depends on:* `feature-computation`, `menu-catalog`, `db-layer`. *Used by:* `counter-card`.
 
 - **`counter-card`** — Everything a cashier needs on phone lookup: identity, loyalty balance,
-  ranked suggestions, pitch line. Dashboard `/loyalty` page (session) and POS-facing
-  `GET /v1/counter?phone=` (API key) serve the same card. Award/redeem + 1:1 note from the
-  same screen. On a 404 (`"no customer with that number yet"` — surfaced to the dashboard via
-  a `status` property the shared `api()` client now attaches to thrown errors), the page shows
-  a "new customer" form instead of a bare error: name + optional menu-item picker, posting to
-  `POST /v1/app/counter/new-customer`, which creates the profile and (if items were picked)
-  records the first purchase through `ingestNormalizedEvents` — the same path CSV/QR use, so
-  loyalty points and opt-in behave identically regardless of entry point.
+  ranked suggestions, pitch line. POS-facing `GET /v1/counter?phone=` (API key) and the
+  dashboard's `GET /counter?phone=` (session) serve the same card. There is no standalone
+  "Counter" dashboard page/nav link anymore — the lookup is folded directly into **Billing**
+  (`apps/dashboard/app/billing/page.tsx`): the existing invoice-form phone field triggers a
+  lookup on blur (so the tenant never types the number twice), and if a match is found the
+  page shows the customer card, suggestions/pitch, points award/redeem, and a personal
+  WhatsApp note inline, right above the item picker. On a 404 (`"no customer with that number
+  yet"` — surfaced via a `status` property the shared `api()` client attaches to thrown
+  errors) Billing shows a "new customer" notice instead — normally nothing further is needed
+  since generating the invoice itself creates the profile (`upsertProfile` +
+  `ingestNormalizedEvents` in `apps/api/src/routes/billing.ts`), but a "add them now without a
+  bill" button is also offered, posting to `POST /v1/app/counter/new-customer` for the
+  no-purchase enrollment case (same endpoint the old Counter page used).
   *Files:* `packages/jobs/src/counter-card.ts`, `apps/api/src/routes/counter.ts`,
-  `apps/dashboard/app/loyalty/page.tsx`, `apps/dashboard/lib/api.ts`.
+  `apps/dashboard/app/billing/page.tsx`, `apps/dashboard/lib/api.ts`.
   *Depends on:* `counter-recommendations`, `ai-counter-pitch`, `loyalty-points`,
-  `phone-normalization`, `direct-messages`, `auth`, `ingestion`, `menu-catalog` (item picker).
+  `phone-normalization`, `direct-messages`, `auth`, `ingestion`, `menu-catalog` (item picker),
+  `gst-billing`. *Used by:* `gst-billing` (same page, same phone field).
 
 - **`loyalty-points`** — Deterministic points math over an append-only ledger; earn happens
   inside ingestion (both paths) so points never drift from events. Backfilled from history
@@ -416,15 +422,21 @@ graph TD
   e-commerce); no GSTN e-invoice IRN/GSP integration (this generates a valid-looking invoice
   document, not a government-registered e-invoice); continuous invoice numbering, no
   financial-year reset.
+  **Counter, folded in**: when the `loyalty` module is enabled, the same phone field also
+  drives `counter-card` — on blur it looks up the number and, if found, shows the customer's
+  identity, loyalty balance, suggestions, award/redeem, and a personal WhatsApp note right on
+  this page (see `counter-card`), so the tenant doesn't retype the number on a separate
+  Counter screen (that standalone page/nav link is gone). With `loyalty` disabled, Billing
+  behaves exactly as before — no lookup fires, no card renders.
   *Files:* `packages/core/src/gst.ts`, `packages/db/src/repos-billing.ts`,
   `apps/api/src/routes/billing.ts`, `apps/dashboard/app/settings/billing/page.tsx`,
   `apps/dashboard/app/billing/page.tsx`, migrations `005_gst_billing.sql`,
   `006_invoice_discounts.sql`.
   *Depends on:* `menu-catalog` (tax rate/HSN per item), `phone-normalization`,
-  `whatsapp-adapter`, `email-adapter`, `db-layer`.
+  `whatsapp-adapter`, `email-adapter`, `db-layer`, `counter-card` (shared phone-lookup panel).
   *Not wired in yet (deliberately out of v1 scope):* auto-generating an invoice from the
-  Counter's `/counter/new-customer` flow or the QR-claim flow — this is a standalone,
-  tenant-invoked action for now, matching "filled by tenant himself."
+  no-purchase enrollment flow or the QR-claim flow — this is a standalone, tenant-invoked
+  action for now, matching "filled by tenant himself."
 
 - **`ai-pricing`** — Optional, admin-gated add-on: bounded, explainable price-change
   recommendations per menu item, from the tenant's own sales history. Gating is the same
@@ -692,20 +704,25 @@ graph TD
     "+ New Segment" button that reveals the describe/discover creator panel — collapsed by
     default), `/campaigns` (approval queue, plus a top-right "+ Create Campaign" button —
     a popover listing existing segments, each one-click-runnable into a campaign, so a
-    tenant doesn't have to leave Campaigns to make one), `/loyalty` (Counter),
-    `/personalization/qr-codes` (online-order QR desk ← `qr-order-capture`, moved out of
-    Upload Data into its own nav entry since it's a distinct workflow, not a CSV import),
-    `/data` (POS CSV upload + history only, now — links out to the QR page), `/preferences`
-    (toggles + frequency cap + receipt/coupon rules ← `coupon-engine`, `order-receipts`) —
-    each still only shown when its own module is enabled — then
-    `/personalization/notifications` (← `platform-notifications`) and
+    tenant doesn't have to leave Campaigns to make one), `/menu` relabeled "Master Data"
+    (item add/edit/delete, images, branch tags/prices — same route as Pricing's copy below,
+    just also reachable from this area so a Personalization-only tenant can still manage
+    their items ← `menu-catalog`), `/personalization/qr-codes` (online-order QR desk ←
+    `qr-order-capture`, moved out of Upload Data into its own nav entry since it's a distinct
+    workflow, not a CSV import), `/data` (POS CSV upload + history only, now — links out to
+    the QR page), `/preferences` (toggles + frequency cap + receipt/coupon rules ←
+    `coupon-engine`, `order-receipts`) — each still only shown when its own module is
+    enabled — then `/personalization/notifications` (← `platform-notifications`) and
     `/personalization/settings` (Master Data/Upload/Download + `business-units`'s
     `BusinessUnitsCard` — always shown, not module-gated).
+    **No standalone Counter page** — `/loyalty` was removed; its phone-lookup/points/note
+    functionality now lives inline on `/billing` (see `gst-billing`/`counter-card`) so the
+    tenant enters the customer's number once, not twice.
   - **Pricing**: `/pricing/dashboard` (← `ai-pricing`'s Pricing Dashboard, first entry),
     `/pricing` Recommendations, `/pricing/pipelines` (← `ai-pricing`'s Pricing Pipelines),
     `/pricing/settings` Item Settings (all always shown once the area is reachable), `/menu`
     relabeled "Master Data" (still gated by the `menu` module flag, same as any other
-    module-gated item — see `menu-catalog`).
+    module-gated item — see `menu-catalog`; same route as Personalization's copy above).
   - **Nav active-state**: longest-prefix match against `pathname`, not a plain
     `startsWith` — `/pricing/settings` must only light up "Item Settings", not also
     "Recommendations" (path `/pricing`, a prefix of it). Fixed after the flat-`startsWith`
