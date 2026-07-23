@@ -26,7 +26,7 @@ const PERSONALIZATION_META: Partial<Record<ModuleKey, { label: string; path: str
   customers: { label: "All Customers", path: "/customers" },
   segments: { label: "Segments", path: "/segments" },
   campaigns: { label: "Campaigns", path: "/campaigns" },
-  loyalty: { label: "Counter", path: "/loyalty" },
+  menu: { label: "Master Data", path: "/menu" },
   data: { label: "Upload Data", path: "/data" },
   preferences: { label: "Preferences", path: "/preferences" },
 };

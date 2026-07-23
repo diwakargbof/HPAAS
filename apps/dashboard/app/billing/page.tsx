@@ -3,10 +3,14 @@
 // Generate Bill — a tenant-invoked GST tax invoice for a sale: pick items,
 // enter the customer's number, hit Generate. Delivered as a printable
 // public page + WhatsApp + email (when the customer has one on file).
+//
+// The phone number entered here also drives the same "at the counter" lookup
+// that used to live on its own page — identity, loyalty balance, suggestions,
+// award/redeem, a personal note — so the tenant never types the number twice.
 
 import { useEffect, useState } from "react";
 import AppShell from "../../components/AppShell";
-import { api } from "../../lib/api";
+import { api, getSession } from "../../lib/api";
 import { useBusinessUnits } from "../../lib/businessUnits";
 
 interface MenuItem {
@@ -23,6 +27,45 @@ interface MenuItem {
 interface BillingProfile {
   defaultGstRate?: number;
 }
+
+interface CounterCard {
+  profileId: string;
+  name: string | null;
+  phone: string;
+  lastVisitDays: number | null;
+  favoriteItem: string | null;
+  loyalty: { balance: number; valueRupees: number };
+  recommendations: Array<{
+    item: string;
+    category: string;
+    price: number | null;
+    reason: string;
+    signal: string;
+  }>;
+  pitch: string;
+  activeFestival: string | null;
+}
+
+interface LedgerEntry {
+  id: string;
+  points: number;
+  reason: string;
+  createdAt: string;
+}
+
+interface DirectMsg {
+  id: string;
+  body: string;
+  status: string;
+  sentAt: string;
+}
+
+const SIGNAL_LABEL: Record<string, string> = {
+  due_reorder: "their usual",
+  pairs_with: "pairs well",
+  category_new: "new for them",
+  festival: "festive",
+};
 
 interface InvoiceLineItem {
   name: string;
@@ -80,6 +123,112 @@ export default function BillingPage() {
   const [discountValue, setDiscountValue] = useState("");
   const [employeeName, setEmployeeName] = useState("");
   const [employeeId, setEmployeeId] = useState("");
+
+  const [card, setCard] = useState<CounterCard | null>(null);
+  const [ledger, setLedger] = useState<LedgerEntry[]>([]);
+  const [recentMessages, setRecentMessages] = useState<DirectMsg[]>([]);
+  const [isNewCustomer, setIsNewCustomer] = useState(false);
+  const [counterLoading, setCounterLoading] = useState(false);
+  const [counterBusy, setCounterBusy] = useState("");
+  const [points, setPoints] = useState(50);
+  const [pointsReason, setPointsReason] = useState("");
+  const [note, setNote] = useState("");
+
+  const fullPhone = phone.trim() ? `${countryCode}${phone.trim()}` : "";
+  const loyaltyEnabled = Boolean(getSession()?.tenant.config.modules.loyalty?.enabled);
+
+  function resetCustomerLookup() {
+    setCard(null);
+    setLedger([]);
+    setRecentMessages([]);
+    setIsNewCustomer(false);
+  }
+
+  async function lookupCustomer(refresh = false) {
+    if (!loyaltyEnabled || !phone.trim()) return;
+    setCounterLoading(true);
+    setIsNewCustomer(false);
+    if (!refresh) {
+      setCard(null);
+      setLedger([]);
+      setRecentMessages([]);
+    }
+    try {
+      const r = await api<{ card: CounterCard; ledger: LedgerEntry[]; recentMessages: DirectMsg[] }>(
+        `/counter?phone=${encodeURIComponent(fullPhone)}${refresh ? "&refresh=1" : ""}`
+      );
+      setCard(r.card);
+      setLedger(r.ledger);
+      setRecentMessages(r.recentMessages);
+    } catch (e) {
+      if (e instanceof Error && (e as Error & { status?: number }).status === 404) {
+        setIsNewCustomer(true);
+      }
+      // Any other lookup error is silent here — Generate Invoice below still works
+      // without a customer card; the invoice route surfaces its own errors.
+    } finally {
+      setCounterLoading(false);
+    }
+  }
+
+  async function adjustPoints(sign: 1 | -1) {
+    if (!card || !points) return;
+    setCounterBusy("points");
+    setError("");
+    try {
+      const r = await api<{ balance: number }>("/loyalty/adjust", {
+        method: "POST",
+        body: JSON.stringify({
+          profileId: card.profileId,
+          points: sign * Math.abs(points),
+          reason: pointsReason.trim() || (sign > 0 ? "Bonus at the counter" : "Redeemed at the counter"),
+        }),
+      });
+      setCard({ ...card, loyalty: { ...card.loyalty, balance: r.balance } });
+      setPointsReason("");
+      lookupCustomer(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCounterBusy("");
+    }
+  }
+
+  async function sendNote() {
+    if (!card || !note.trim()) return;
+    setCounterBusy("note");
+    setError("");
+    try {
+      await api("/direct-message", {
+        method: "POST",
+        body: JSON.stringify({ profileId: card.profileId, body: note.trim() }),
+      });
+      setNote("");
+      lookupCustomer(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCounterBusy("");
+    }
+  }
+
+  async function registerWithoutBill() {
+    if (!name.trim() || !phone.trim()) return;
+    setCounterBusy("register");
+    setError("");
+    try {
+      await api("/counter/new-customer", {
+        method: "POST",
+        body: JSON.stringify({ phone: fullPhone, name: name.trim(), items: [] }),
+      });
+      setIsNewCustomer(false);
+      lookupCustomer(false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setCounterBusy("");
+    }
+  }
 
   useEffect(() => {
     const params = new URLSearchParams();
@@ -161,6 +310,7 @@ export default function BillingPage() {
       setDiscountValue("");
       setEmployeeName("");
       setEmployeeId("");
+      resetCustomerLookup();
       loadInvoices();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -196,7 +346,11 @@ export default function BillingPage() {
           <input
             type="text"
             value={phone}
-            onChange={(e) => setPhone(e.target.value)}
+            onChange={(e) => {
+              setPhone(e.target.value);
+              if (card || isNewCustomer) resetCustomerLookup();
+            }}
+            onBlur={() => lookupCustomer(false)}
             placeholder="Customer phone"
             style={{ maxWidth: 220 }}
           />
@@ -218,6 +372,138 @@ export default function BillingPage() {
             </select>
           )}
         </div>
+        {counterLoading && <div className="muted" style={{ marginBottom: 14 }}>Looking up customer…</div>}
+
+        {isNewCustomer && (
+          <div className="notice" style={{ marginBottom: 14 }}>
+            No one&apos;s bought from you with this number yet — it&apos;ll be added automatically once you
+            generate the invoice below.{" "}
+            {name.trim() && (
+              <button
+                className="btn btn-ghost"
+                style={{ padding: "3px 10px", fontSize: "0.82rem", marginLeft: 6 }}
+                disabled={counterBusy === "register"}
+                onClick={registerWithoutBill}
+              >
+                {counterBusy === "register" ? "Adding…" : "Or add them now without a bill"}
+              </button>
+            )}
+          </div>
+        )}
+
+        {card && (
+          <div className="grid grid-2" style={{ marginBottom: 14 }}>
+            <div className="card">
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+                <div>
+                  <div className="stat-label">Customer</div>
+                  <div className="stat-value" style={{ fontSize: "1.4rem" }}>{card.name ?? "No name yet"}</div>
+                  <div className="muted">{card.phone}</div>
+                </div>
+                <div style={{ textAlign: "right" }}>
+                  <div className="stat-label">Points</div>
+                  <div className="stat-value" style={{ fontSize: "1.4rem" }}>{card.loyalty.balance}</div>
+                  <div className="muted">≈ ₹{card.loyalty.valueRupees}</div>
+                </div>
+              </div>
+              <table style={{ marginTop: 10 }}>
+                <tbody>
+                  <tr>
+                    <td className="muted">Last visit</td>
+                    <td>{card.lastVisitDays === null ? "—" : `${card.lastVisitDays} days ago`}</td>
+                  </tr>
+                  <tr>
+                    <td className="muted">Favorite</td>
+                    <td>{card.favoriteItem ?? "—"}</td>
+                  </tr>
+                  {card.activeFestival && (
+                    <tr>
+                      <td className="muted">Coming up</td>
+                      <td>{card.activeFestival}</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+              <div className="msg-preview" style={{ maxWidth: "none", fontStyle: "italic", marginTop: 10 }}>
+                💬 {card.pitch}
+              </div>
+              {card.recommendations.map((r) => (
+                <div key={r.item} style={{ display: "flex", gap: 10, alignItems: "baseline", padding: "6px 0", borderBottom: "1px solid var(--line)" }}>
+                  <strong>{r.item}</strong>
+                  {r.price !== null && <span className="muted">₹{r.price}</span>}
+                  <span className="badge badge-type">{SIGNAL_LABEL[r.signal] ?? r.signal}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="card">
+              <div className="section-title">Points &amp; a personal note</div>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", marginBottom: 10 }}>
+                <input
+                  type="number"
+                  min={1}
+                  value={points}
+                  onChange={(e) => setPoints(Math.max(1, Number(e.target.value) || 1))}
+                  style={{ width: 90 }}
+                />
+                <input
+                  type="text"
+                  value={pointsReason}
+                  onChange={(e) => setPointsReason(e.target.value)}
+                  placeholder="Reason (optional)"
+                  style={{ maxWidth: 180 }}
+                />
+                <button className="btn btn-primary" style={{ padding: "4px 10px", fontSize: "0.82rem" }} disabled={counterBusy === "points"} onClick={() => adjustPoints(1)}>
+                  Award
+                </button>
+                <button className="btn btn-ghost" style={{ padding: "4px 10px", fontSize: "0.82rem" }} disabled={counterBusy === "points"} onClick={() => adjustPoints(-1)}>
+                  Redeem
+                </button>
+              </div>
+              <table style={{ marginBottom: 10 }}>
+                <tbody>
+                  {ledger.length === 0 && (
+                    <tr>
+                      <td className="muted">No points activity yet.</td>
+                    </tr>
+                  )}
+                  {ledger.slice(0, 3).map((l) => (
+                    <tr key={l.id}>
+                      <td className="muted">{new Date(l.createdAt).toLocaleDateString()}</td>
+                      <td>{l.reason}</td>
+                      <td className="num" style={{ color: l.points >= 0 ? "var(--good)" : "var(--bad)" }}>
+                        {l.points >= 0 ? `+${l.points}` : l.points}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <textarea
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder={`e.g. "Namaste! Your favorite ${card.favoriteItem ?? "sweets"} are fresh today — see you soon?"`}
+              />
+              <div style={{ marginTop: 10 }}>
+                <button className="btn btn-primary" disabled={counterBusy === "note" || !note.trim()} onClick={sendNote}>
+                  {counterBusy === "note" ? "Sending…" : "Send WhatsApp"}
+                </button>
+              </div>
+              {recentMessages.length > 0 && (
+                <div style={{ marginTop: 14 }}>
+                  <div className="stat-label" style={{ marginBottom: 6 }}>Recent notes</div>
+                  {recentMessages.slice(0, 3).map((m) => (
+                    <div className="msg-preview" key={m.id}>
+                      {m.body}
+                      <div className="muted" style={{ fontSize: "0.75rem", marginTop: 4 }}>
+                        {new Date(m.sentAt).toLocaleString()} · {m.status}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {menuItems.length > 0 ? (
           <div style={{ marginBottom: 14 }}>
