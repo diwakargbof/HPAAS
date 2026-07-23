@@ -1376,6 +1376,80 @@ async function getPriceRecommendation(tenantId, menuItemId, businessUnitId = "")
      WHERE pr.tenant_id = $1 AND pr.menu_item_id = $2 AND pr.business_unit_id = $3`, [tenantId, menuItemId, businessUnitId]);
   return row ? mapPriceRecommendation(row) : null;
 }
+var mapPricingPipeline = (r) => ({
+  id: r.id,
+  tenantId: r.tenant_id,
+  name: r.name,
+  mode: r.mode,
+  scheduleType: r.schedule_type,
+  scheduleIntervalDays: r.schedule_interval_days,
+  scheduleDate: r.schedule_date ? new Date(r.schedule_date).toISOString().slice(0, 10) : null,
+  businessUnitId: r.business_unit_id ?? "",
+  itemIds: r.item_ids ?? [],
+  enabled: r.enabled,
+  lastRunAt: r.last_run_at,
+  createdAt: r.created_at,
+  updatedAt: r.updated_at
+});
+async function listPricingPipelines(tenantId) {
+  const rows = await query(`SELECT * FROM pricing_pipelines WHERE tenant_id = $1 ORDER BY created_at`, [tenantId]);
+  return rows.map(mapPricingPipeline);
+}
+async function getPricingPipeline(tenantId, id) {
+  const row = await queryOne(`SELECT * FROM pricing_pipelines WHERE tenant_id = $1 AND id = $2`, [tenantId, id]);
+  return row ? mapPricingPipeline(row) : null;
+}
+async function createPricingPipeline(tenantId, p) {
+  const row = await queryOne(`INSERT INTO pricing_pipelines
+       (tenant_id, name, mode, schedule_type, schedule_interval_days, schedule_date, business_unit_id, item_ids)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING *`, [
+    tenantId,
+    p.name,
+    p.mode,
+    p.scheduleType,
+    p.scheduleIntervalDays ?? null,
+    p.scheduleDate ?? null,
+    p.businessUnitId ?? "",
+    JSON.stringify(p.itemIds ?? [])
+  ]);
+  return mapPricingPipeline(row);
+}
+async function updatePricingPipeline(tenantId, id, p) {
+  const row = await queryOne(`UPDATE pricing_pipelines SET
+       name = coalesce($3, name),
+       mode = coalesce($4, mode),
+       schedule_type = coalesce($5, schedule_type),
+       schedule_interval_days = CASE WHEN $6::boolean THEN $7 ELSE schedule_interval_days END,
+       schedule_date = CASE WHEN $8::boolean THEN $9::date ELSE schedule_date END,
+       business_unit_id = coalesce($10, business_unit_id),
+       item_ids = coalesce($11, item_ids),
+       enabled = coalesce($12, enabled),
+       updated_at = now()
+     WHERE tenant_id = $1 AND id = $2
+     RETURNING *`, [
+    tenantId,
+    id,
+    p.name ?? null,
+    p.mode ?? null,
+    p.scheduleType ?? null,
+    "scheduleIntervalDays" in p,
+    p.scheduleIntervalDays ?? null,
+    "scheduleDate" in p,
+    p.scheduleDate ?? null,
+    p.businessUnitId ?? null,
+    p.itemIds !== void 0 ? JSON.stringify(p.itemIds) : null,
+    p.enabled ?? null
+  ]);
+  return row ? mapPricingPipeline(row) : null;
+}
+async function deletePricingPipeline(tenantId, id) {
+  await query(`DELETE FROM pricing_pipelines WHERE tenant_id = $1 AND id = $2`, [tenantId, id]);
+}
+async function markPricingPipelineRun(id, opts = {}) {
+  await query(`UPDATE pricing_pipelines SET last_run_at = now(), enabled = CASE WHEN $2::boolean THEN false ELSE enabled END, updated_at = now()
+     WHERE id = $1`, [id, Boolean(opts.disable)]);
+}
 
 // ../../packages/db/dist/repos-notifications.js
 var mapPlatformNotification = (r) => ({
@@ -9763,6 +9837,38 @@ async function refreshPricingRecommendations(tenant, opts = {}) {
     computedAt: /* @__PURE__ */ new Date()
   }));
 }
+async function applyPriceRecommendations(tenantId, recommendations, businessUnitId = "") {
+  for (const r of recommendations) {
+    if (businessUnitId) {
+      await upsertMenuItemBranchPrice(tenantId, r.menuItemId, businessUnitId, r.suggestedPrice);
+    } else {
+      await updateMenuItemPrice(tenantId, r.menuItemId, r.suggestedPrice);
+    }
+  }
+  return recommendations.length;
+}
+
+// ../../packages/jobs/dist/pricing-pipelines.js
+var MS_PER_DAY2 = 24 * 60 * 60 * 1e3;
+async function executePipeline(tenant, pipeline) {
+  const businessUnitId = pipeline.businessUnitId || void 0;
+  const all = await refreshPricingRecommendations(tenant, { businessUnitId });
+  const scoped = pipeline.itemIds.length > 0 ? all.filter((r) => pipeline.itemIds.includes(r.menuItemId)) : all;
+  if (pipeline.mode !== "automatic") {
+    return { refreshed: scoped.length, applied: 0, skippedNeedsReview: 0 };
+  }
+  const applicable = scoped.filter((r) => !r.needsReview);
+  const applied = await applyPriceRecommendations(tenant.id, applicable, pipeline.businessUnitId);
+  return { refreshed: scoped.length, applied, skippedNeedsReview: scoped.length - applicable.length };
+}
+async function runPricingPipelineNow(tenant, pipelineId) {
+  const pipeline = await getPricingPipeline(tenant.id, pipelineId);
+  if (!pipeline)
+    return null;
+  const result = await executePipeline(tenant, pipeline);
+  await markPricingPipelineRun(pipeline.id, { disable: pipeline.scheduleType === "on_date" });
+  return result;
+}
 
 // src/routes/segments.ts
 var segmentsRouter = Router5();
@@ -10495,6 +10601,8 @@ invoicesPublicRouter.get("/:token", async (req, res) => {
 
 // src/routes/pricing.ts
 import { Router as Router10 } from "express";
+var PIPELINE_MODES = ["manual", "automatic"];
+var PIPELINE_SCHEDULE_TYPES = ["daily", "weekly", "every_n_days", "on_date"];
 var ROUNDING_RULES = ["none", "nearest_5", "nearest_10", "end_99", "end_95"];
 var PRICING_WIDGET_TYPES = [
   "recommendation_summary",
@@ -10602,24 +10710,83 @@ pricingRouter.post("/pricing/apply", async (req, res) => {
       res.status(409).json({ error: "This recommendation needs review before applying" });
       return;
     }
-    if (businessUnitId) {
-      await upsertMenuItemBranchPrice(tenant.id, recommendation.menuItemId, businessUnitId, recommendation.suggestedPrice);
-    } else {
-      await updateMenuItemPrice(tenant.id, recommendation.menuItemId, recommendation.suggestedPrice);
-    }
+    await applyPriceRecommendations(tenant.id, [recommendation], businessUnitId);
     res.json({ applied: 1, skippedNeedsReview: 0 });
     return;
   }
   const all = await listPriceRecommendations(tenant.id, businessUnitId);
   const applicable = all.filter((r) => !r.needsReview);
-  for (const r of applicable) {
-    if (businessUnitId) {
-      await upsertMenuItemBranchPrice(tenant.id, r.menuItemId, businessUnitId, r.suggestedPrice);
-    } else {
-      await updateMenuItemPrice(tenant.id, r.menuItemId, r.suggestedPrice);
-    }
-  }
+  await applyPriceRecommendations(tenant.id, applicable, businessUnitId);
   res.json({ applied: applicable.length, skippedNeedsReview: all.length - applicable.length });
+});
+pricingRouter.get("/pricing/pipelines", async (req, res) => {
+  res.json({ pipelines: await listPricingPipelines(req.tenant.id) });
+});
+pricingRouter.post("/pricing/pipelines", async (req, res) => {
+  const tenant = req.tenant;
+  const body = req.body ?? {};
+  const name = String(body.name ?? "").trim();
+  if (!name) {
+    res.status(400).json({ error: "name is required" });
+    return;
+  }
+  if (!PIPELINE_MODES.includes(body.mode)) {
+    res.status(400).json({ error: `mode must be one of ${PIPELINE_MODES.join(", ")}` });
+    return;
+  }
+  if (!PIPELINE_SCHEDULE_TYPES.includes(body.scheduleType)) {
+    res.status(400).json({ error: `scheduleType must be one of ${PIPELINE_SCHEDULE_TYPES.join(", ")}` });
+    return;
+  }
+  const config = pricingConfig(tenant.config);
+  const businessUnitId = config.useBusinessUnitsInPricing && typeof body.businessUnitId === "string" ? body.businessUnitId : "";
+  const pipeline = await createPricingPipeline(tenant.id, {
+    name: name.slice(0, 80),
+    mode: body.mode,
+    scheduleType: body.scheduleType,
+    scheduleIntervalDays: body.scheduleType === "every_n_days" ? Math.max(1, Math.min(365, Number(body.scheduleIntervalDays) || 1)) : null,
+    scheduleDate: body.scheduleType === "on_date" && body.scheduleDate ? String(body.scheduleDate).slice(0, 10) : null,
+    businessUnitId,
+    itemIds: Array.isArray(body.itemIds) ? body.itemIds.map(String) : []
+  });
+  res.json({ pipeline });
+});
+pricingRouter.put("/pricing/pipelines/:id", async (req, res) => {
+  const tenant = req.tenant;
+  const body = req.body ?? {};
+  const config = pricingConfig(tenant.config);
+  const patch = {};
+  if (typeof body.name === "string" && body.name.trim()) patch.name = body.name.trim().slice(0, 80);
+  if (PIPELINE_MODES.includes(body.mode)) patch.mode = body.mode;
+  if (PIPELINE_SCHEDULE_TYPES.includes(body.scheduleType)) patch.scheduleType = body.scheduleType;
+  if ("scheduleIntervalDays" in body) {
+    patch.scheduleIntervalDays = body.scheduleIntervalDays ? Math.max(1, Math.min(365, Number(body.scheduleIntervalDays))) : null;
+  }
+  if ("scheduleDate" in body) {
+    patch.scheduleDate = body.scheduleDate ? String(body.scheduleDate).slice(0, 10) : null;
+  }
+  if (config.useBusinessUnitsInPricing && typeof body.businessUnitId === "string") patch.businessUnitId = body.businessUnitId;
+  if (Array.isArray(body.itemIds)) patch.itemIds = body.itemIds.map(String);
+  if (typeof body.enabled === "boolean") patch.enabled = body.enabled;
+  const pipeline = await updatePricingPipeline(tenant.id, req.params.id, patch);
+  if (!pipeline) {
+    res.status(404).json({ error: "pipeline not found" });
+    return;
+  }
+  res.json({ pipeline });
+});
+pricingRouter.delete("/pricing/pipelines/:id", async (req, res) => {
+  await deletePricingPipeline(req.tenant.id, req.params.id);
+  res.json({ ok: true });
+});
+pricingRouter.post("/pricing/pipelines/:id/run", async (req, res) => {
+  const tenant = req.tenant;
+  const result = await runPricingPipelineNow(tenant, req.params.id);
+  if (!result) {
+    res.status(404).json({ error: "pipeline not found" });
+    return;
+  }
+  res.json(result);
 });
 
 // src/app.ts

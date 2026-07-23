@@ -6619,6 +6619,9 @@ function variablesForProfile(profile, features, extra = {}) {
 // ../../packages/jobs/dist/copy-generator.js
 var import_dayjs4 = __toESM(require_dayjs_min(), 1);
 
+// ../../packages/jobs/dist/pricing-pipelines.js
+var MS_PER_DAY = 24 * 60 * 60 * 1e3;
+
 // ../../packages/channels/dist/whatsapp.js
 var GRAPH_API_BASE = "https://graph.facebook.com/v20.0";
 function mode() {

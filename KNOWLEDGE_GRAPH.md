@@ -498,19 +498,52 @@ graph TD
   `GET/PUT /v1/app/settings/pricing-dashboard` (`PricingDashboardConfig`, same
   optional-config + default-accessor idiom). Stays tenant-wide only — no branch dimension on
   the dashboard, since Recommendations is where branch-scoped work happens.
+  **Item-level "use suggested price"**: Master Data's inline item editor
+  (`apps/dashboard/app/menu/page.tsx`) fetches `GET /pricing/recommendations` alongside menu
+  items (only when `modules.pricing.enabled`) and, if the item being edited has a matching
+  recommendation, shows "AI suggests ₹X (trend) — Use this price" next to the price field —
+  a convenience fill-in only, the tenant still hits Save to commit. No new endpoint; reads
+  the existing recommendations list.
+  **Pricing Pipelines** (`/pricing/pipelines`) — scheduled, scoped refresh with an optional
+  auto-apply step, so a tenant doesn't have to manually return to Recommendations every
+  time. A pipeline (`pricing_pipelines` table, migration `013_pricing_pipelines.sql`)
+  carries **no bounds/rounding of its own** — those still come from `PricingConfig`, one
+  source of truth; a pipeline is only WHEN to run (`daily` | `weekly` [hardcoded 7 days] |
+  `every_n_days` | `on_date` [one-time, self-disables after firing]) + WHICH scope (branch,
+  optional `itemIds` subset — can only *narrow* what Item Settings already targets, never
+  widen it) + HOW to finish (`mode: "manual"` refreshes only, leaving recommendations for
+  review exactly like clicking Refresh by hand; `mode: "automatic"` refreshes then applies
+  everything **except** `needsReview` rows — the Safety Net is never bypassed, even here).
+  Due-ness is a pure function (`isPipelineDue`, `packages/jobs/src/pricing-pipelines.ts`) so
+  it's testable independent of the DB/clock. `runDuePricingPipelines()` is called from
+  **`nightly.ts`**, not a new cron endpoint — Vercel Hobby is already at its 2-cron-job limit
+  (see the `⚠️ Deploy gotcha` under `api-app`). `POST /pricing/pipelines/:id/run` triggers
+  one pipeline immediately, same logic, for testing or "run now" without waiting on the
+  schedule. Applying (both the manual "Apply"/"Apply all" route and automatic pipeline runs)
+  goes through one shared `applyPriceRecommendations()` helper in
+  `packages/jobs/src/pricing.ts` — no duplicated apply logic between the two paths.
+  **Demo bar** (`apps/dashboard/app/pricing/locked.tsx`): tenants without
+  `modules.pricing.enabled` see a "Demo" banner plus a static, dimmed, illustrative
+  Recommendations table (hardcoded example rows, clearly not real data) instead of a bare
+  "contact admin" line — shown on every Pricing sub-page (`/pricing`, `/pricing/settings`,
+  `/pricing/dashboard`, `/pricing/pipelines`) via the same shared component. `dadus` and any
+  tenant with the module enabled are entirely unaffected (this only renders on the 403 path).
   *Files:* `packages/core/src/pricing.ts`, `packages/ai/src/{provider,anthropic-provider,mock-provider,index}.ts`,
-  `packages/db/src/repos-pricing.ts`, `packages/jobs/src/pricing.ts`,
-  `apps/api/src/routes/pricing.ts`, `apps/dashboard/app/pricing/{page,locked,dashboard/page}.tsx`
-  (Recommendations + Dashboard) + `apps/dashboard/app/pricing/settings/page.tsx` (Item
-  Settings — card grid: Rounding Rule, Safety Net, Business Units, Item Bounds with a Manual
-  Pricing column), migrations `007_pricing.sql`, `008_pricing_safety_net.sql`,
-  `012_branch_pricing.sql`.
+  `packages/db/src/repos-pricing.ts`, `packages/jobs/src/{pricing,pricing-pipelines}.ts`,
+  `apps/api/src/routes/pricing.ts`, `apps/api/api-src/cron/nightly.ts`,
+  `apps/dashboard/app/pricing/{page,locked,dashboard/page,pipelines/page}.tsx`
+  (Recommendations + Dashboard + Pipelines) + `apps/dashboard/app/pricing/settings/page.tsx`
+  (Item Settings — card grid: Rounding Rule, Safety Net, Business Units in Pricing, Item
+  Bounds with a Manual Pricing column), migrations `007_pricing.sql`,
+  `008_pricing_safety_net.sql`, `012_branch_pricing.sql`, `013_pricing_pipelines.sql`.
   *Depends on:* `menu-catalog` (items + prices + branch tags), `business-units`
   (branch-scoped signal + price overrides), `ingestion` (events.items sales history),
   `db-layer`. *Used by:* `dashboard-app`.
   *Enabled for:* `dadus` (demo tenant) only, as of this writing — every other tenant sees the
-  nav group locked (🔒) as an upsell until you explicitly add
-  `"pricing": { "enabled": true, "order": N }` to their config, same admin-gating mechanism.
+  demo bar (see above) as an upsell until you explicitly add
+  `"pricing": { "enabled": true, "order": N }` to their config, same admin-gating mechanism —
+  distinct from `areas.pricing` (see `dashboard-app`), which controls whether the Pricing tab
+  *exists at all* for a tenant, demo or not.
 
 - **`personalization-dashboard`** — A tenant-configurable widget board at
   `/personalization/dashboard`, the first entry in the Personalization nav group. Reuses
@@ -623,7 +656,11 @@ graph TD
 
 - **`scheduled-jobs`** — The named `JOBS` registry shared by worker cron AND Vercel Cron:
   `compute-features` (nightly + post-ingest), `evaluate-triggers` (daily),
-  `send-campaigns` (5-min safety net), `email-fallback` (hourly).
+  `send-campaigns` (5-min safety net), `email-fallback` (hourly). `runDuePricingPipelines`
+  (see `ai-pricing`'s Pricing Pipelines) is called directly from `cron/nightly.ts` alongside
+  `compute-features`/`evaluate-triggers` rather than added to this named registry — it has no
+  standalone worker-CLI use case (pipelines are always either schedule-driven or triggered
+  via "Run now" in the dashboard), so it didn't need the extra indirection.
   *Files:* `packages/jobs/src/index.ts` + per-job files.
   *Depends on:* `feature-computation`, `trigger-engine`, `campaign-sender`, `email-fallback`.
   *Used by:* `worker-app`, `cron-endpoints`.
@@ -636,8 +673,18 @@ graph TD
 - **`dashboard-app`** — Next.js shop-owner app (:3000), tenant-themed. **Top bar** (not
   sidebar) switches between exactly two areas — Personalization / Pricing — persisted to
   `localStorage["hpas_active_area"]`; the "Pricing" tab shows 🔒 when `modules.pricing`
-  isn't enabled (an upsell, not a hide — see `ai-pricing`). The **sidebar shows only the
-  active area's full menu**, no collapsible groups:
+  isn't enabled (an upsell, not a hide — see `ai-pricing`'s demo bar). The **sidebar shows
+  only the active area's full menu**, no collapsible groups.
+  **Per-tenant area visibility** (`TenantConfig.areas`, `areasConfig()` default-accessor,
+  both `personalization`/`pricing` default `true`): a coarser, distinct control from
+  `modules.pricing.enabled` — that decides whether an already-*visible* Pricing tab is
+  locked or unlocked; `areas.pricing: false` means the tab **doesn't exist at all** for that
+  tenant (no lock, no demo bar), for a tenant Pricing genuinely isn't offered to.
+  `areas.personalization: false` hides the Personalization tab the same way, e.g. for a
+  Pricing-only tenant. Set per-tenant in `config.json` (zero-code, same mechanism as every
+  other flag) — not an env var, since env vars are process-wide across every tenant in one
+  deployment. `AppShell` corrects the active area on load if the stored/default one isn't
+  visible for this tenant (e.g. falls back to Pricing if Personalization is hidden).
   - **Personalization**: `/personalization/dashboard` (← `personalization-dashboard`,
     always first, not gated by its own module), `/insights` (customer picture + impact ←
     `attribution`), `/customers` (full searchable/sortable directory, branch-filterable ←
@@ -655,9 +702,10 @@ graph TD
     `/personalization/settings` (Master Data/Upload/Download + `business-units`'s
     `BusinessUnitsCard` — always shown, not module-gated).
   - **Pricing**: `/pricing/dashboard` (← `ai-pricing`'s Pricing Dashboard, first entry),
-    `/pricing` Recommendations, `/pricing/settings` Item Settings (all always shown once the
-    area is reachable), `/menu` relabeled "Master Data" (still gated by the `menu` module
-    flag, same as any other module-gated item — see `menu-catalog`).
+    `/pricing` Recommendations, `/pricing/pipelines` (← `ai-pricing`'s Pricing Pipelines),
+    `/pricing/settings` Item Settings (all always shown once the area is reachable), `/menu`
+    relabeled "Master Data" (still gated by the `menu` module flag, same as any other
+    module-gated item — see `menu-catalog`).
   - **Nav active-state**: longest-prefix match against `pathname`, not a plain
     `startsWith` — `/pricing/settings` must only light up "Item Settings", not also
     "Recommendations" (path `/pricing`, a prefix of it). Fixed after the flat-`startsWith`
