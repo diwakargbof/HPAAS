@@ -63,9 +63,28 @@ by the safety net (§3.2) until it has more data.
 
 Each recommendation gets a short plain-English reason ("demand is up 30% over the last 90
 days, so a modest increase captures willingness to pay"). This one line comes from an AI
-call — if `ANTHROPIC_API_KEY` isn't set, or the AI call fails for any reason, a deterministic
-fallback reason (built straight from the demand trend) is used instead. **The suggested
-price itself never depends on the AI call** — only the wording of the explanation does.
+call, gated by the **AI Assist** toggle for Pricing (`/settings` → **AI Assist** →
+"Use AI for Pricing & Inventory rationale", off by default) — if AI Assist is off, no API
+key is available, or the AI call fails for any reason, a deterministic fallback reason
+(built straight from the demand trend) is used instead. **The suggested price itself never
+depends on the AI call** — only the wording of the explanation does. The same toggle also
+gates Inventory's reorder rationale (see `INVENTORY_GUIDE.md` §2.3) — Pricing and Inventory
+share one AI Assist surface, not two separate switches.
+
+**Turning it on**: `/settings` → **AI Assist** card → toggle "Use AI for Pricing & Inventory
+rationale" on → set a **Model provider** (only `anthropic` is supported today) and,
+optionally, a **Model** override → paste your provider's API key → **Save key**. The key is
+stored per tenant, in its own database row — never inside your tenant config, and never
+sent back to the browser once saved. An admin can instead set `AI_API_KEY` (+ optionally
+`AI_PROVIDER`/`AI_MODEL`) as a platform-wide fallback for every tenant that turns the toggle
+on without pasting their own key — a tenant's own saved key always wins if both exist.
+
+**Example — before/after**: with AI Assist off, "Kaju Katli" rising 22% shows the reason
+"Selling more than usual lately — a small increase captures demand without denting volume."
+With AI Assist on, the same recommendation might instead read something like "Kaju Katli
+has been flying off the shelves this Diwali season — a modest bump keeps margins healthy
+without slowing sales." Same suggested price and % change either way — only the sentence
+changes.
 
 ### 2.4 Should this tenant even see a Pricing tab?
 
@@ -351,3 +370,14 @@ illustrative example rows — nothing else changes, no re-setup needed.
 **"I only want Pricing, not the customer/campaign side of the app."**
 That's an `areas` config change (§2.4), not something you can toggle yourself from the
 dashboard — ask your admin to set `"areas": {"personalization": false}` on your tenant.
+
+**"I want the price-change reasons to sound less generic."**
+`/settings` → AI Assist card → toggle "Use AI for Pricing & Inventory rationale" on → paste
+an API key → Save key (§2.3). Recommendations keep computing exactly the same suggested
+prices/bounds either way — only the explanation sentence changes.
+
+**"AI Assist is on but the reasons still look templated."**
+Confirm a key is actually saved — `/settings` → AI Assist shows "a key is already saved"
+once one exists. With the toggle on but no key anywhere (no saved per-tenant key and no
+platform `AI_API_KEY` env var), every rationale silently falls back to the deterministic
+demand-trend wording, same as with the toggle off — nothing errors, so it's easy to miss.

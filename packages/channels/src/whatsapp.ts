@@ -23,6 +23,7 @@ import {
   getMessageByRedemptionCode,
   getQrOrderForTenant,
   getTenantById,
+  getTenantChannelSecrets,
   getWhatsappOptIns,
   insertEvent,
   redeemCoupon,
@@ -48,10 +49,6 @@ const GRAPH_API_BASE = "https://graph.facebook.com/v20.0";
 // never set to anything meaningful.
 const NAME_FROM_MESSAGE_RE = /this is\s+([^,]{1,80}),\s*adding my order/i;
 
-function mode(): "stub" | "live" {
-  return process.env.WHATSAPP_MODE === "live" ? "live" : "stub";
-}
-
 /**
  * Ensure a WhatsApp template exists for this campaign's copy.
  * stub mode: instantly "approved". live mode: recorded as "submitted" —
@@ -64,7 +61,8 @@ export async function ensureCampaignTemplate(
   templateBody: string,
   variables: string[]
 ): Promise<{ approved: boolean }> {
-  const status = mode() === "stub" ? "approved" : "submitted";
+  const secrets = await getTenantChannelSecrets(tenant.id);
+  const status = secrets.whatsappMode === "stub" ? "approved" : "submitted";
   await upsertWhatsappTemplate({
     tenantId: tenant.id,
     name: `${campaignType}_${hashish(templateBody)}`,
@@ -73,7 +71,7 @@ export async function ensureCampaignTemplate(
     status,
     campaignType,
   });
-  if (mode() === "live") {
+  if (secrets.whatsappMode === "live") {
     // TODO(whatsapp-live): POST /{waba_id}/message_templates to submit for review.
   }
   return { approved: status === "approved" };
@@ -100,7 +98,8 @@ export async function sendViaWhatsApp(
     };
   }
 
-  if (mode() === "stub") {
+  const secrets = await getTenantChannelSecrets(tenant.id);
+  if (secrets.whatsappMode === "stub") {
     return { ok: true, providerMessageId: `stub-wa-${meta.messageId}` };
   }
 
@@ -108,11 +107,11 @@ export async function sendViaWhatsApp(
   // TODO(whatsapp-live): map our named {{variables}} onto the approved
   // template's numbered {{1}},{{2}} params in registration order.
   const res = await fetch(
-    `${GRAPH_API_BASE}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+    `${GRAPH_API_BASE}/${secrets.whatsappPhoneNumberId}/messages`,
     {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
+        Authorization: `Bearer ${secrets.whatsappAccessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({

@@ -113,6 +113,28 @@ export interface PricingRationaleResult {
   rationale: string;
 }
 
+// ---------- AI inventory reorder rationale ----------
+// Additive only, same shape/discipline as pricing rationale: the deterministic
+// reorder engine (packages/core/src/inventory.ts) never depends on this.
+
+export interface InventoryRationaleItem {
+  menuItemId: string;
+  name: string;
+  daysOfStockLeft: number | null;
+  suggestedOrderQty: number;
+  urgency: "low" | "medium" | "high";
+}
+
+export interface InventoryRationaleRequest {
+  shopName: string;
+  items: InventoryRationaleItem[];
+}
+
+export interface InventoryRationaleResult {
+  menuItemId: string;
+  rationale: string;
+}
+
 export interface CopyProvider {
   readonly name: string;
   generateTemplate(req: CopyRequest): Promise<CopyResult>;
@@ -124,4 +146,6 @@ export interface CopyProvider {
   writeCounterPitch(req: PitchRequest): Promise<string>;
   /** One short rationale per price recommendation, batched in a single call. */
   writePricingRationale(req: PricingRationaleRequest): Promise<PricingRationaleResult[]>;
+  /** One short rationale per reorder suggestion, batched in a single call. */
+  writeInventoryRationale(req: InventoryRationaleRequest): Promise<InventoryRationaleResult[]>;
 }

@@ -74,10 +74,9 @@ nothing here breaks that option.
    | `AUTH_SECRET` | a random secret (`openssl rand -hex 32`) |
    | `DEMO_PASSWORD` | your dashboard login password |
    | `CRON_SECRET` | a random secret — **required**, see below |
-   | `ANTHROPIC_API_KEY` | recommended — powers all four AI features (campaign copy, the natural-language segment builder, segment discovery, counter pitch lines). Omit and a deterministic mock provider serves all four, so the app still works end to end |
-   | `ANTHROPIC_MODEL` | `claude-opus-4-8` |
-   | `WHATSAPP_MODE` | `stub` (until Meta BSP approval lands) |
-   | `EMAIL_MODE` | `stub` or `resend` (+ `RESEND_API_KEY`) |
+   | `AI_API_KEY` / `AI_PROVIDER` / `AI_MODEL` | optional platform-wide fallback for tenants who turn on AI Assist (`/settings`) but haven't saved their own key — see PRICING_GUIDE.md §2.3. `ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL` still work as legacy aliases. Omit entirely and every AI-touching surface uses a deterministic mock provider, so the app still works end to end |
+   | `WHATSAPP_MODE` | `stub` (platform-wide fallback only — each tenant now sets their own mode/number/tokens from `/settings` → **Channels**, which always overrides this) |
+   | `EMAIL_MODE` | `stub` or `resend` (+ `RESEND_API_KEY`) — same per-tenant override via `/settings` → **Channels** |
 
    `CRON_SECRET` is what authorizes Vercel Cron to call `/api/cron/*` —
    Vercel automatically sends it as `Authorization: Bearer $CRON_SECRET` on

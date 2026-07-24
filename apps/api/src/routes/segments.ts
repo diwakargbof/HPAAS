@@ -4,17 +4,18 @@
 // before anything is saved. A hallucinated column dies here, loudly.
 
 import { Router } from "express";
-import { authorSegmentFromPrompt, discoverSegments, type SegmentContext } from "@hpas/ai";
+import { authorSegmentFromPrompt, defaultProvider, discoverSegments, type SegmentContext } from "@hpas/ai";
 import { audienceForSegment, compileRule, evaluateTriggersForTenant } from "@hpas/core";
 import { makeCopyGenerator } from "@hpas/jobs";
 import {
   deleteSegment,
+  getTenantApiKey,
   listSegments,
   segmentDiscoveryStats,
   selectAudience,
   upsertSegment,
 } from "@hpas/db";
-import { ALL_CAMPAIGN_TYPES, type SegmentRule, type Tenant } from "@hpas/types";
+import { aiAssistConfig, ALL_CAMPAIGN_TYPES, type SegmentRule, type Tenant } from "@hpas/types";
 
 export const segmentsRouter: import("express").Router = Router();
 
@@ -32,6 +33,18 @@ async function contextFor(tenant: Tenant): Promise<{
     },
     stats,
   };
+}
+
+/** Resolves this tenant's personalization AI-assist provider (mock when off). */
+async function providerFor(tenant: Tenant) {
+  const assist = aiAssistConfig(tenant.config);
+  const secret = assist.personalization ? await getTenantApiKey(tenant.id) : null;
+  return defaultProvider({
+    aiAssistEnabled: assist.personalization,
+    provider: secret?.provider,
+    apiKey: secret?.apiKey,
+    model: secret?.model,
+  });
 }
 
 /** Compile (whitelist check) + count the audience. Throws on a bad rule. */
@@ -63,7 +76,7 @@ segmentsRouter.post("/segments/preview", async (req, res) => {
   }
   try {
     const { context } = await contextFor(tenant);
-    const proposal = await authorSegmentFromPrompt({ prompt, context });
+    const proposal = await authorSegmentFromPrompt({ prompt, context }, await providerFor(tenant));
     const audienceSize = await previewRule(tenant, proposal.rule);
     res.json({ proposal: { ...proposal, audienceSize } });
   } catch (err) {
@@ -78,16 +91,19 @@ segmentsRouter.post("/segments/discover", async (req, res) => {
   const tenant = req.tenant!;
   const { context, stats } = await contextFor(tenant);
   const existing = await listSegments(tenant.id);
-  const proposals = await discoverSegments({
-    context,
-    stats: {
-      recencyBuckets: stats.recencyBuckets,
-      categorySpend: stats.categorySpend,
-      festivalBuyers: stats.festivalBuyers,
-      withCadence: stats.withCadence,
+  const proposals = await discoverSegments(
+    {
+      context,
+      stats: {
+        recencyBuckets: stats.recencyBuckets,
+        categorySpend: stats.categorySpend,
+        festivalBuyers: stats.festivalBuyers,
+        withCadence: stats.withCadence,
+      },
+      existingSegmentNames: existing.map((s) => s.name),
     },
-    existingSegmentNames: existing.map((s) => s.name),
-  });
+    await providerFor(tenant)
+  );
 
   const sized = [];
   for (const p of proposals) {

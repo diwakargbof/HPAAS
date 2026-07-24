@@ -8,6 +8,8 @@ import type {
   CopyRequest,
   CopyResult,
   DiscoverSegmentsRequest,
+  InventoryRationaleRequest,
+  InventoryRationaleResult,
   PitchRequest,
   PricingRationaleRequest,
   PricingRationaleResult,
@@ -186,6 +188,25 @@ export class AnthropicCopyProvider implements CopyProvider {
     );
     const parsed = parseJson<PricingRationaleResult[]>(text);
     if (!Array.isArray(parsed)) throw new Error("expected an array of pricing rationales");
+    return parsed;
+  }
+
+  async writeInventoryRationale(req: InventoryRationaleRequest): Promise<InventoryRationaleResult[]> {
+    const text = await this.ask(
+      [
+        `You explain stock-reorder suggestions for "${req.shopName}", a small Indian retail shop, to its owner.`,
+        `For each item below, write ONE short reason (max 140 chars, plain language, no jargon) the owner can read before deciding whether to place the order.`,
+        `Reply with JSON ONLY: an array of {"menuItemId", "rationale"}, one per item, same order as given.`,
+      ].join("\n"),
+      req.items
+        .map(
+          (it) =>
+            `- ${it.menuItemId}: "${it.name}", days of stock left: ${it.daysOfStockLeft ?? "unknown"}, suggested order qty: ${it.suggestedOrderQty}, urgency: ${it.urgency}`
+        )
+        .join("\n")
+    );
+    const parsed = parseJson<InventoryRationaleResult[]>(text);
+    if (!Array.isArray(parsed)) throw new Error("expected an array of inventory rationales");
     return parsed;
   }
 

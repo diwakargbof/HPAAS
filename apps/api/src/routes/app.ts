@@ -18,6 +18,9 @@ import {
   getProfilesByIds,
   getSegment,
   getPreferences,
+  getTenantAiProviderInfo,
+  getTenantChannelInfo,
+  getTenantChannelSecrets,
   listActivePlatformNotifications,
   listCampaigns,
   listCustomers,
@@ -27,11 +30,14 @@ import {
   patchTenantConfig,
   setCampaignCopy,
   setCampaignStatus,
+  setTenantApiKey,
+  setTenantChannelSecrets,
   topProfilesByLtv,
   upsertPreference,
 } from "@hpas/db";
 import {
   ALL_CAMPAIGN_TYPES,
+  aiAssistConfig,
   businessUnitsConfig,
   couponConfig,
   personalizationDashboardConfig,
@@ -487,20 +493,86 @@ appRouter.put("/settings/business-units", async (req, res) => {
   res.json({ enabled, units });
 });
 
+// ---------- AI assist (per-tenant, opt-in LLM usage for Personalization + Pricing) ----------
+// Off by default. The API key itself is never returned by GET — only a
+// masked hasApiKey boolean (see getTenantAiProviderInfo/setTenantApiKey).
+// Covers both areas, so this lives on the tenant-wide settings router, not
+// pricingRouter or a future inventoryRouter.
+
+appRouter.get("/settings/ai-assist", async (req, res) => {
+  const tenant = req.tenant!;
+  const info = await getTenantAiProviderInfo(tenant.id);
+  res.json({ aiAssist: aiAssistConfig(tenant.config), ...info });
+});
+
+appRouter.put("/settings/ai-assist", async (req, res) => {
+  const tenant = req.tenant!;
+  const body = req.body ?? {};
+
+  await patchTenantConfig(tenant.id, {
+    aiAssist: {
+      personalization: Boolean(body.personalization),
+      pricing: Boolean(body.pricing),
+    },
+  });
+
+  const secretPatch: Parameters<typeof setTenantApiKey>[1] = {};
+  if (typeof body.provider === "string" && body.provider.trim()) secretPatch.provider = body.provider.trim().toLowerCase();
+  if (typeof body.apiKey === "string") secretPatch.apiKey = body.apiKey.trim() || null;
+  if ("model" in body) secretPatch.model = typeof body.model === "string" && body.model.trim() ? body.model.trim() : null;
+  if (Object.keys(secretPatch).length > 0) {
+    await setTenantApiKey(tenant.id, secretPatch);
+  }
+
+  res.json({ ok: true });
+});
+
 // ---------- settings ----------
 
 appRouter.get("/settings", async (req, res) => {
   const tenant = req.tenant!;
+  const secrets = await getTenantChannelSecrets(tenant.id);
   res.json({
     shopName: tenant.config.branding.shopName,
     branding: tenant.config.branding,
     whatsapp: {
       number: tenant.whatsappNumber,
-      mode: process.env.WHATSAPP_MODE === "live" ? "live" : "stub",
-      connected: process.env.WHATSAPP_MODE === "live",
+      mode: secrets.whatsappMode,
+      connected: secrets.whatsappMode === "live",
     },
     email: tenant.config.channels.email,
     apiKey: tenant.apiKey,
     festivals: tenant.config.festivals,
   });
+});
+
+// ---------- channels (WhatsApp + email credentials, per tenant) ----------
+// Each tenant has their own WhatsApp Business number and, optionally, their
+// own email sender — no longer a single platform-wide env var. A tenant's
+// own saved value always overrides the platform env var of the same name
+// (see getTenantChannelSecrets); GET here never returns a raw secret, only
+// masked booleans.
+
+appRouter.get("/settings/channels", async (req, res) => {
+  res.json(await getTenantChannelInfo(req.tenant!.id));
+});
+
+appRouter.put("/settings/channels", async (req, res) => {
+  const tenant = req.tenant!;
+  const body = req.body ?? {};
+  const patch: Parameters<typeof setTenantChannelSecrets>[1] = {};
+
+  if (body.whatsappMode === "live" || body.whatsappMode === "stub") patch.whatsappMode = body.whatsappMode;
+  if (typeof body.whatsappPhoneNumberId === "string") patch.whatsappPhoneNumberId = body.whatsappPhoneNumberId.trim() || null;
+  if (typeof body.whatsappAccessToken === "string") patch.whatsappAccessToken = body.whatsappAccessToken.trim() || null;
+  if (typeof body.whatsappWebhookVerifyToken === "string") {
+    patch.whatsappWebhookVerifyToken = body.whatsappWebhookVerifyToken.trim() || null;
+  }
+  if (body.emailMode === "resend" || body.emailMode === "stub") patch.emailMode = body.emailMode;
+  if (typeof body.resendApiKey === "string") patch.resendApiKey = body.resendApiKey.trim() || null;
+
+  if (Object.keys(patch).length > 0) {
+    await setTenantChannelSecrets(tenant.id, patch);
+  }
+  res.json({ ok: true });
 });

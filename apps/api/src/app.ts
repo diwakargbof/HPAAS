@@ -4,6 +4,13 @@
 // request handler.
 
 import express from "express";
+// Patches Express 4 so a rejected promise inside an async route handler is
+// forwarded to error-handling middleware like a thrown error would be —
+// without this, an async handler that rejects (e.g. a DB constraint
+// violation) hangs the request forever instead of ever sending a response,
+// since Express 4 never calls next(err) for you. Import must come before
+// any router/route is defined.
+import "express-async-errors";
 import cors from "cors";
 import { apiKeyAuth, loginHandler, sessionAuth } from "./auth.js";
 import { ingestRouter } from "./routes/ingest.js";
@@ -16,6 +23,7 @@ import { menuRouter } from "./routes/menu.js";
 import { qrOrdersRouter, qrPublicRouter } from "./routes/qr-orders.js";
 import { billingRouter, invoicesPublicRouter } from "./routes/billing.js";
 import { pricingRouter } from "./routes/pricing.js";
+import { inventoryRouter } from "./routes/inventory.js";
 
 export const app: express.Express = express();
 app.use(cors());
@@ -56,6 +64,7 @@ app.use("/v1/app", sessionAuth, menuRouter);
 app.use("/v1/app", sessionAuth, qrOrdersRouter);
 app.use("/v1/app", sessionAuth, billingRouter);
 app.use("/v1/app", sessionAuth, pricingRouter);
+app.use("/v1/app", sessionAuth, inventoryRouter);
 
 // Machine API (API-key auth): streaming events, uploads, POS redemptions,
 // the counter card (so billing software can show it at checkout and
@@ -65,3 +74,21 @@ app.use("/v1", apiKeyAuth, ingestRouter);
 app.use("/v1", apiKeyAuth, redemptionsRouter);
 app.use("/v1", apiKeyAuth, counterRouter);
 app.use("/v1", apiKeyAuth, qrOrdersRouter);
+
+// Catch-all error handler — must be the last app.use(). Without this (and
+// express-async-errors above), an error thrown/rejected inside any async
+// route handler would hang the request forever instead of ever responding.
+// Postgres foreign-key violations (e.g. deleting a menu item that still has
+// inventory stock_ledger/reorder_suggestions history) get a clear 409;
+// everything else is a generic 500 — never a silent hang.
+app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const pgErr = err as { code?: string; message?: string };
+  if (pgErr?.code === "23503") {
+    res.status(409).json({
+      error: "Can't complete this — it still has related records (e.g. inventory stock history). Remove those first.",
+    });
+    return;
+  }
+  console.error("[api] unhandled error:", err);
+  res.status(500).json({ error: "internal server error" });
+});

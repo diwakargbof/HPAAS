@@ -12,6 +12,8 @@ import type {
   CopyRequest,
   CopyResult,
   DiscoverSegmentsRequest,
+  InventoryRationaleRequest,
+  InventoryRationaleResult,
   PitchRequest,
   PricingRationaleRequest,
   PricingRationaleResult,
@@ -26,6 +28,8 @@ export type {
   CopyRequest,
   CopyResult,
   DiscoverSegmentsRequest,
+  InventoryRationaleRequest,
+  InventoryRationaleResult,
   PitchRequest,
   PricingRationaleRequest,
   PricingRationaleResult,
@@ -36,9 +40,55 @@ export type {
 export { AnthropicCopyProvider } from "./anthropic-provider.js";
 export { MockCopyProvider } from "./mock-provider.js";
 
-export function defaultProvider(): CopyProvider {
-  return process.env.ANTHROPIC_API_KEY
-    ? new AnthropicCopyProvider()
+/**
+ * A caller's resolved AI-assist state for one tenant + surface (personalization
+ * or pricing — see @hpas/types' aiAssistConfig()). Built by the caller from
+ * tenant.config + the tenant's own tenant_secrets row, never from process.env
+ * alone, so each tenant's opt-in, provider, and key are honored independently.
+ * `provider`/`apiKey`/`model` are deliberately generic (not Anthropic-named):
+ * a tenant can bring any AI model's key, not only Anthropic's.
+ */
+export interface ProviderSelection {
+  aiAssistEnabled: boolean;
+  /** e.g. "anthropic". Defaults to "anthropic" — the only backend implemented today. */
+  provider?: string;
+  apiKey?: string | null;
+  model?: string;
+}
+
+/** provider name -> factory. Add an entry here (+ a new *-provider.ts) to support another AI model, no other call site changes. */
+const PROVIDER_FACTORIES: Record<string, (opts: { apiKey?: string; model?: string }) => CopyProvider> = {
+  anthropic: (opts) => new AnthropicCopyProvider(opts),
+};
+
+/**
+ * Resolves which provider backs a call. This is the ONLY place the
+ * AI-assist on/off branch lives — every call site just resolves a
+ * ProviderSelection and passes it through:
+ *   - no selection, or aiAssistEnabled false -> MockCopyProvider (the exact
+ *     deterministic behavior every surface already has with no API key)
+ *   - aiAssistEnabled true + a per-tenant apiKey -> that provider's SDK,
+ *     using the tenant's own key
+ *   - aiAssistEnabled true, no per-tenant key -> falls back to the
+ *     platform-wide AI_API_KEY/AI_PROVIDER/AI_MODEL env vars if AI_API_KEY is
+ *     set, else Mock. These are deliberately generic, not Anthropic-named —
+ *     one common variable set that works no matter which provider is
+ *     configured, so switching the platform default off Anthropic later is
+ *     an env-var change, not a code change.
+ */
+export function defaultProvider(selection?: ProviderSelection): CopyProvider {
+  if (!selection || !selection.aiAssistEnabled) return new MockCopyProvider();
+  const provider = selection.provider ?? process.env.AI_PROVIDER ?? "anthropic";
+  const factory = PROVIDER_FACTORIES[provider] ?? PROVIDER_FACTORIES.anthropic;
+  if (selection.apiKey) {
+    return factory({ apiKey: selection.apiKey, model: selection.model ?? process.env.AI_MODEL });
+  }
+  // AI_API_KEY is the generic platform-wide fallback; ANTHROPIC_API_KEY is
+  // kept as a legacy alias so existing deployments that only set that one
+  // don't need an env change.
+  const envKey = process.env.AI_API_KEY ?? process.env.ANTHROPIC_API_KEY;
+  return envKey
+    ? factory({ apiKey: envKey, model: selection.model ?? process.env.AI_MODEL })
     : new MockCopyProvider();
 }
 
@@ -161,6 +211,48 @@ export async function generatePricingRationale(
   for (const item of req.items) {
     if (!rationales[item.menuItemId]) {
       rationales[item.menuItemId] = fallbackPricingRationale(item);
+    }
+  }
+  return rationales;
+}
+
+function fallbackInventoryRationale(item: InventoryRationaleRequest["items"][number]): string {
+  if (item.daysOfStockLeft === null) return "Not enough sales history yet to estimate how long stock will last.";
+  return item.urgency === "high"
+    ? `At current sales pace, stock runs out in about ${Math.round(item.daysOfStockLeft)} day(s) — reorder soon.`
+    : item.urgency === "medium"
+      ? `Stock is comfortable for now but worth planning a reorder soon.`
+      : `Stock is well ahead of current sales pace.`;
+}
+
+/**
+ * One short rationale per reorder suggestion, one batched call for the whole
+ * set — mirrors generatePricingRationale exactly. Correctness never depends
+ * on the AI call: the deterministic fields (days left, suggested qty/date)
+ * always stand alone; any item the model skips or a malformed reply falls
+ * back to a deterministic rationale built from its urgency/days-left.
+ */
+export async function generateInventoryRationale(
+  req: InventoryRationaleRequest,
+  provider: CopyProvider = defaultProvider()
+): Promise<Record<string, string>> {
+  const byId = new Map(req.items.map((it) => [it.menuItemId, it]));
+  let results: InventoryRationaleResult[] = [];
+  try {
+    results = await provider.writeInventoryRationale(req);
+  } catch {
+    results = [];
+  }
+
+  const rationales: Record<string, string> = {};
+  for (const r of results) {
+    if (byId.has(r.menuItemId) && typeof r.rationale === "string" && r.rationale.trim()) {
+      rationales[r.menuItemId] = r.rationale.trim().slice(0, 200);
+    }
+  }
+  for (const item of req.items) {
+    if (!rationales[item.menuItemId]) {
+      rationales[item.menuItemId] = fallbackInventoryRationale(item);
     }
   }
   return rationales;

@@ -49,14 +49,16 @@ your hosting provider's environment settings) and fill in:
 | `PUBLIC_API_URL` | Printable pages/links | The public URL of the API (used in invoice/QR links) |
 | `DEMO_PASSWORD` | Demo tenants | Password used by seeded demo tenants (e.g. `dadus`) |
 | `CRON_SECRET` | Scheduled jobs | Shared secret Vercel Cron uses to call `/cron/*` endpoints |
-| `ANTHROPIC_API_KEY` | AI features | Anthropic API key. **If left empty, the platform runs a deterministic mock AI provider** — segment discovery, campaign copy, counter pitches, and pricing rationale all still work, just with canned/templated text instead of real generation. This is fine for development; set a real key for production AI quality. |
-| `ANTHROPIC_MODEL` | AI features | Which Claude model to call (only matters if `ANTHROPIC_API_KEY` is set) |
-| `WHATSAPP_MODE` | Real WhatsApp sends | `stub` (default) or `live` — see §2.2 |
-| `WHATSAPP_PHONE_NUMBER_ID` | Real WhatsApp sends | Meta WhatsApp Business phone number id |
-| `WHATSAPP_ACCESS_TOKEN` | Real WhatsApp sends | Meta Graph API access token |
-| `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | Real WhatsApp sends | Token Meta uses to verify your webhook URL (defaults to `dev-verify-token`) |
-| `EMAIL_MODE` | Real email sends | `stub` (default) or `resend` — see §2.3 |
-| `RESEND_API_KEY` | Real email sends | API key from resend.com |
+| `AI_PROVIDER` | AI Assist (platform default) | Which AI model backend the platform falls back to for tenants who've turned AI Assist on but haven't saved their own key yet. Only `anthropic` is implemented today. Generic on purpose — see §2.6. |
+| `AI_API_KEY` | AI Assist (platform default) | The platform-wide fallback API key for that provider. **If left empty (and no tenant has their own key saved), every AI Assist surface uses a deterministic mock provider** — segment discovery, campaign copy, counter pitches, and pricing/inventory rationale all still work, just with canned/templated text instead of real generation. |
+| `AI_MODEL` | AI Assist (platform default) | Which model to call, for the provider above. |
+| `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | AI Assist (legacy) | Older, Anthropic-specific names for the same two variables above — still read as a fallback if `AI_API_KEY`/`AI_MODEL` aren't set, so existing deployments don't need to change anything. |
+| `WHATSAPP_MODE` | Real WhatsApp sends (platform default) | `stub` (default) or `live` — see §2.2. **Every one of these five WhatsApp/email vars is now just the platform-wide fallback** — each tenant can set their own WhatsApp number/tokens and email sender from `/settings` → **Channels**, which always overrides the env var of the same name. Leave these unset (or `stub`) if every tenant configures their own. |
+| `WHATSAPP_PHONE_NUMBER_ID` | Real WhatsApp sends (platform default) | Meta WhatsApp Business phone number id |
+| `WHATSAPP_ACCESS_TOKEN` | Real WhatsApp sends (platform default) | Meta Graph API access token |
+| `WHATSAPP_WEBHOOK_VERIFY_TOKEN` | Real WhatsApp sends (platform default) | Token Meta uses to verify your webhook URL (defaults to `dev-verify-token`) |
+| `EMAIL_MODE` | Real email sends (platform default) | `stub` (default) or `resend` — see §2.3 |
+| `RESEND_API_KEY` | Real email sends (platform default) | API key from resend.com |
 | `NEXT_PUBLIC_API_URL` | Dashboard | The API's URL, as seen by the dashboard's browser code |
 
 ### 2.2 Setting up real WhatsApp sending
@@ -179,6 +181,59 @@ This is distinct from each individual `modules.*.enabled` flag, which controls w
 inside an already-visible area show up. `areas.personalization: false` removes the whole tab
 — for a tenant that only bought Pricing and has no interest in customer/campaign features.
 See the Pricing Guide §2.4 for the mirror-image case.
+
+### 2.6 AI Assist — using a real AI model instead of the built-in mock
+
+Every AI-touching surface in Personalization — campaign copy generation, "describe your
+audience" segment authoring, AI segment discovery, and the counter-card pitch line — works
+out of the box with **no setup at all**, using a deterministic, canned/templated writer
+(`MockCopyProvider`). That's what every tenant gets until **AI Assist** is turned on.
+
+**What it is.** A per-tenant, **off-by-default** slide toggle (`/settings` → **AI Assist**
+card) that swaps the mock writer for a real AI model call on those four surfaces. Off is not
+a degraded mode — it's the exact same deterministic behavior every tenant already has;
+turning AI Assist on simply makes the wording more natural/varied. This is intended to
+become a paid add-on once usage grows, so treat it as an admin-visible cost lever, not
+something to flip on for every tenant by default.
+
+**What to expect when it's on vs. off**:
+
+| Surface | AI Assist off (default) | AI Assist on |
+|---|---|---|
+| Campaign copy (`/campaigns`, `/segments`) | One of a handful of pre-written templates per campaign type, with `{{variable}}` placeholders filled from real customer data. | A real AI model writes a fresh template per campaign, in the shop's configured brand voice, still restricted to the same allowed placeholders. |
+| "Describe your audience" segment authoring | Keyword matching over your prompt (dates, "lapsed", "regular", festival names, spend thresholds) — good enough for common phrasing, less flexible for unusual wording. | A real AI model interprets free-form phrasing more flexibly. Either way, the resulting rule is still compiled through the whitelisted rule engine and previewed against real data before you can save it — a hallucinated column fails loudly at preview, never silently. |
+| AI segment discovery | A fixed playbook of four segment templates, thresholded by your own customer quartiles. | A real AI model proposes segments tailored to your actual aggregate stats. |
+| Counter-card pitch line | A short templated line built from the customer's favorite item, top recommendation, and festival context. | A real AI model writes a more natural one-liner from the same inputs. |
+
+**How to turn it on**: `/settings` → **AI Assist** card →
+
+1. Toggle **"Use AI for Personalization"** on.
+2. Set **Model provider** (only `anthropic` is supported today — leave it as the default
+   unless told otherwise) and, optionally, a specific **Model** override.
+3. Paste your provider's API key into the **API key** field and click **Save key**.
+
+That's the entire setup — no environment variable, no redeploy, no code change. The key you
+paste is stored **per tenant**, in its own database row (never inside your tenant's regular
+config, and never sent back to the browser once saved — the Settings page only ever shows
+"a key is already saved," never the key itself). Clearing the field and clicking **Clear
+key** removes it; turning the toggle off stops using AI immediately even if a key is still
+saved.
+
+**Where the key actually lives / platform fallback**: if you want every tenant that turns
+AI Assist on to share one platform-level key instead of pasting their own, an admin can set
+`AI_API_KEY` (+ optionally `AI_PROVIDER` / `AI_MODEL`) in the API's environment — see the
+table in §2.1. A tenant's own saved key always takes priority over the platform env vars
+when both exist. Leaving both unset for a tenant with AI Assist **on** simply falls back to
+the deterministic mock, same as if AI Assist were off — nothing ever errors out for a
+missing key.
+
+**Use case example**: you've turned AI Assist on and want a winback campaign for customers
+who haven't visited in 60–90 days. Go to Segments → "+ New Segment" → describe it in plain
+words ("customers who used to come every couple weeks but haven't been in over two months")
+→ the AI proposal is previewed with a live audience count before you save anything → once
+saved, create a campaign from that segment and the copy step now asks the real AI model for
+a fresh message in your shop's brand voice, instead of picking from the built-in winback
+template.
 
 ---
 
@@ -533,3 +588,16 @@ handle it outside the platform (this feed is specifically for platform-wide anno
 Personalization Settings → Download Data → Export all customers (CSV). You can also export
 just one segment's current audience the same way — useful for handing a specific list to a
 call center or another tool.
+
+**"I want campaign copy and the counter pitch to sound less templated."**
+Turn on AI Assist (§2.6): `/settings` → AI Assist card → toggle "Use AI for
+Personalization" on → paste an API key → Save key. Every future campaign copy generation,
+segment authoring/discovery, and counter pitch now calls a real AI model instead of the
+built-in writer — nothing else about the workflow changes.
+
+**"I turned AI Assist on but everything still looks templated."**
+Check that an API key is actually saved (`/settings` → AI Assist shows "a key is already
+saved" once one is set) — with the toggle on but no key anywhere (neither a saved
+per-tenant key nor the platform's `AI_API_KEY` env var), every surface quietly falls back to
+the same deterministic writer as if AI Assist were off. Nothing errors, so this is easy to
+miss; the fix is just to paste and save a key.

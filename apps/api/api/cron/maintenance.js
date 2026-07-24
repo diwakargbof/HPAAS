@@ -6544,6 +6544,21 @@ async function getApprovedTemplate(tenantId, campaignType) {
   };
 }
 
+// ../../packages/db/dist/repos-tenant-secrets.js
+async function getTenantChannelSecrets(tenantId) {
+  const row = await queryOne(`SELECT whatsapp_mode, whatsapp_phone_number_id, whatsapp_access_token,
+            whatsapp_webhook_verify_token, email_mode, resend_api_key
+     FROM tenant_secrets WHERE tenant_id = $1`, [tenantId]);
+  return {
+    whatsappMode: row?.whatsapp_mode ?? (process.env.WHATSAPP_MODE === "live" ? "live" : "stub"),
+    whatsappPhoneNumberId: row?.whatsapp_phone_number_id ?? process.env.WHATSAPP_PHONE_NUMBER_ID,
+    whatsappAccessToken: row?.whatsapp_access_token ?? process.env.WHATSAPP_ACCESS_TOKEN,
+    whatsappWebhookVerifyToken: row?.whatsapp_webhook_verify_token ?? process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN ?? "dev-verify-token",
+    emailMode: row?.email_mode ?? (process.env.EMAIL_MODE === "resend" ? "resend" : "stub"),
+    resendApiKey: row?.resend_api_key ?? process.env.RESEND_API_KEY
+  };
+}
+
 // ../../packages/db/dist/migrate.js
 import fs from "node:fs";
 import path3 from "node:path";
@@ -6624,11 +6639,9 @@ var MS_PER_DAY = 24 * 60 * 60 * 1e3;
 
 // ../../packages/channels/dist/whatsapp.js
 var GRAPH_API_BASE = "https://graph.facebook.com/v20.0";
-function mode() {
-  return process.env.WHATSAPP_MODE === "live" ? "live" : "stub";
-}
 async function ensureCampaignTemplate(tenant, campaignType, templateBody, variables) {
-  const status = mode() === "stub" ? "approved" : "submitted";
+  const secrets = await getTenantChannelSecrets(tenant.id);
+  const status = secrets.whatsappMode === "stub" ? "approved" : "submitted";
   await upsertWhatsappTemplate({
     tenantId: tenant.id,
     name: `${campaignType}_${hashish(templateBody)}`,
@@ -6637,7 +6650,7 @@ async function ensureCampaignTemplate(tenant, campaignType, templateBody, variab
     status,
     campaignType
   });
-  if (mode() === "live") {
+  if (secrets.whatsappMode === "live") {
   }
   return { approved: status === "approved" };
 }
@@ -6653,13 +6666,14 @@ async function sendViaWhatsApp(tenant, profile, renderedText, meta) {
       error: `no approved WhatsApp template for campaign type "${meta.campaignType}"`
     };
   }
-  if (mode() === "stub") {
+  const secrets = await getTenantChannelSecrets(tenant.id);
+  if (secrets.whatsappMode === "stub") {
     return { ok: true, providerMessageId: `stub-wa-${meta.messageId}` };
   }
-  const res = await fetch(`${GRAPH_API_BASE}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+  const res = await fetch(`${GRAPH_API_BASE}/${secrets.whatsappPhoneNumberId}/messages`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
+      Authorization: `Bearer ${secrets.whatsappAccessToken}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
@@ -6701,13 +6715,14 @@ async function sendViaEmail(tenant, profile, renderedText, meta) {
   if (!tenant.config.channels.email.enabled) {
     return { ok: false, error: "email channel disabled for tenant" };
   }
-  if (process.env.EMAIL_MODE !== "resend") {
+  const secrets = await getTenantChannelSecrets(tenant.id);
+  if (secrets.emailMode !== "resend") {
     return { ok: true, providerMessageId: `stub-email-${meta.messageId}` };
   }
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+      Authorization: `Bearer ${secrets.resendApiKey}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({

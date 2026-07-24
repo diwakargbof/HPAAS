@@ -4,16 +4,17 @@
 // counter-card.ts, not on the trigger/campaign path so no injected-callback
 // abstraction is needed.
 
-import { generatePricingRationale } from "@hpas/ai";
+import { defaultProvider, generatePricingRationale } from "@hpas/ai";
 import { activeFestivalWindow, computePriceRecommendation } from "@hpas/core";
 import {
+  getTenantApiKey,
   listMenuItems,
   tenantItemSalesByName,
   updateMenuItemPrice,
   upsertMenuItemBranchPrice,
   upsertPriceRecommendations,
 } from "@hpas/db";
-import { pricingConfig, type PriceRecommendation, type Tenant } from "@hpas/types";
+import { aiAssistConfig, pricingConfig, type PriceRecommendation, type Tenant } from "@hpas/types";
 
 export async function refreshPricingRecommendations(
   tenant: Tenant,
@@ -62,17 +63,28 @@ export async function refreshPricingRecommendations(
     );
   });
 
-  const rationaleByItem = await generatePricingRationale({
-    shopName: tenant.config.branding.shopName,
-    occasion: config.occasion ?? activeFestival?.name ?? null,
-    items: recommendations.map((r) => ({
-      menuItemId: r.menuItemId,
-      name: r.name,
-      currentPrice: r.currentPrice,
-      suggestedPrice: r.suggestedPrice,
-      demandTrend: r.demandTrend,
-    })),
+  const assist = aiAssistConfig(tenant.config);
+  const secret = assist.pricing ? await getTenantApiKey(tenant.id) : null;
+  const provider = defaultProvider({
+    aiAssistEnabled: assist.pricing,
+    provider: secret?.provider,
+    apiKey: secret?.apiKey,
+    model: secret?.model,
   });
+  const rationaleByItem = await generatePricingRationale(
+    {
+      shopName: tenant.config.branding.shopName,
+      occasion: config.occasion ?? activeFestival?.name ?? null,
+      items: recommendations.map((r) => ({
+        menuItemId: r.menuItemId,
+        name: r.name,
+        currentPrice: r.currentPrice,
+        suggestedPrice: r.suggestedPrice,
+        demandTrend: r.demandTrend,
+      })),
+    },
+    provider
+  );
 
   const rows = recommendations.map((r) => ({
     menuItemId: r.menuItemId,

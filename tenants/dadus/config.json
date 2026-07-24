@@ -20,7 +20,8 @@
     "data": { "enabled": true, "order": 8 },
     "settings": { "enabled": true, "order": 9 },
     "billing": { "enabled": true, "order": 10 },
-    "pricing": { "enabled": true, "order": 11 }
+    "pricing": { "enabled": true, "order": 11 },
+    "inventory": { "enabled": true, "order": 12 }
   },
   "loyalty": {
     "enabled": true,

@@ -433,6 +433,7 @@ var require_customParseFormat = __commonJS({
 
 // src/app.ts
 import express from "express";
+import "express-async-errors";
 import cors from "cors";
 
 // src/auth.ts
@@ -911,7 +912,13 @@ var mapMenuItem = (r) => ({
   hsnCode: r.hsn_code ?? null,
   businessUnitIds: r.business_unit_ids ?? [],
   imageUrl: r.image_url ?? null,
-  createdAt: r.created_at
+  createdAt: r.created_at,
+  trackStock: r.track_stock ?? false,
+  currentQty: r.current_qty !== void 0 && r.current_qty !== null ? Number(r.current_qty) : 0,
+  unit: r.unit ?? "unit",
+  reorderPoint: r.reorder_point === null || r.reorder_point === void 0 ? null : Number(r.reorder_point),
+  leadTimeDays: r.lead_time_days === null || r.lead_time_days === void 0 ? null : Number(r.lead_time_days),
+  lastRestockedAt: r.last_restocked_at ?? null
 });
 async function listMenuItems(tenantId, opts = {}) {
   const rows = await query(`SELECT m.*, bp.price AS branch_price
@@ -1465,6 +1472,230 @@ async function listActivePlatformNotifications() {
   return rows.map(mapPlatformNotification);
 }
 
+// ../../packages/db/dist/repos-inventory.js
+var mapMenuItemWithStock = (r) => ({
+  id: r.id,
+  tenantId: r.tenant_id,
+  name: r.name,
+  category: r.category,
+  price: Number(r.price),
+  description: r.description,
+  tags: r.tags ?? [],
+  available: r.available,
+  gstRate: r.gst_rate === null || r.gst_rate === void 0 ? null : Number(r.gst_rate),
+  hsnCode: r.hsn_code ?? null,
+  businessUnitIds: r.business_unit_ids ?? [],
+  imageUrl: r.image_url ?? null,
+  createdAt: r.created_at,
+  trackStock: r.track_stock ?? false,
+  currentQty: r.current_qty !== void 0 && r.current_qty !== null ? Number(r.current_qty) : 0,
+  unit: r.unit ?? "unit",
+  reorderPoint: r.reorder_point === null || r.reorder_point === void 0 ? null : Number(r.reorder_point),
+  leadTimeDays: r.lead_time_days === null || r.lead_time_days === void 0 ? null : Number(r.lead_time_days),
+  lastRestockedAt: r.last_restocked_at ?? null,
+  branchPrice: null
+});
+async function listMenuItemsWithStock(tenantId, opts = {}) {
+  const rows = await query(`SELECT * FROM menu_items WHERE tenant_id = $1 ${opts.trackedOnly ? "AND track_stock = true" : ""}
+     ORDER BY category, name`, [tenantId]);
+  return rows.map(mapMenuItemWithStock);
+}
+async function getMenuItemStock(tenantId, menuItemId) {
+  const row = await queryOne(`SELECT * FROM menu_items WHERE tenant_id = $1 AND id = $2`, [
+    tenantId,
+    menuItemId
+  ]);
+  if (!row)
+    return null;
+  const item = mapMenuItemWithStock(row);
+  return {
+    menuItemId: item.id,
+    currentQty: item.currentQty,
+    unit: item.unit,
+    reorderPoint: item.reorderPoint,
+    leadTimeDays: item.leadTimeDays,
+    trackStock: item.trackStock,
+    lastRestockedAt: item.lastRestockedAt
+  };
+}
+async function updateMenuItemStockSettings(tenantId, menuItemId, patch) {
+  const row = await queryOne(`UPDATE menu_items SET
+       track_stock = coalesce($3, track_stock),
+       unit = coalesce($4, unit),
+       reorder_point = CASE WHEN $5::boolean THEN $6 ELSE reorder_point END,
+       lead_time_days = CASE WHEN $7::boolean THEN $8 ELSE lead_time_days END
+     WHERE tenant_id = $1 AND id = $2
+     RETURNING *`, [
+    tenantId,
+    menuItemId,
+    patch.trackStock ?? null,
+    patch.unit ?? null,
+    "reorderPoint" in patch,
+    patch.reorderPoint ?? null,
+    "leadTimeDays" in patch,
+    patch.leadTimeDays ?? null
+  ]);
+  return row ? mapMenuItemWithStock(row) : null;
+}
+async function recordStockAdjustment(tenantId, menuItemId, delta, source, reason) {
+  await withTransaction(async (client) => {
+    await client.query(`INSERT INTO stock_ledger (tenant_id, menu_item_id, delta, source, reason) VALUES ($1, $2, $3, $4, $5)`, [tenantId, menuItemId, delta, source, reason]);
+    await client.query(`UPDATE menu_items SET
+         current_qty = current_qty + $3,
+         last_restocked_at = CASE WHEN $4 = 'restock' THEN now() ELSE last_restocked_at END
+       WHERE tenant_id = $1 AND id = $2`, [tenantId, menuItemId, delta, source]);
+  });
+}
+async function listStockLedger(tenantId, menuItemId, limit = 50) {
+  const rows = await query(`SELECT * FROM stock_ledger WHERE tenant_id = $1 AND ($2::uuid IS NULL OR menu_item_id = $2)
+     ORDER BY created_at DESC LIMIT $3`, [tenantId, menuItemId ?? null, limit]);
+  return rows.map((r) => ({
+    id: r.id,
+    tenantId: r.tenant_id,
+    menuItemId: r.menu_item_id,
+    delta: Number(r.delta),
+    source: r.source,
+    reason: r.reason,
+    createdAt: r.created_at
+  }));
+}
+var mapReorderSuggestion = (r) => ({
+  menuItemId: r.menu_item_id,
+  name: r.name,
+  currentQty: Number(r.current_qty),
+  avgDailySales: Number(r.avg_daily_sales),
+  daysOfStockLeft: r.days_of_stock_left === null || r.days_of_stock_left === void 0 ? null : Number(r.days_of_stock_left),
+  suggestedOrderQty: Number(r.suggested_order_qty),
+  suggestedOrderDate: r.suggested_order_date ? new Date(r.suggested_order_date).toISOString().slice(0, 10) : r.suggested_order_date,
+  urgency: r.urgency,
+  rationale: r.rationale ?? null,
+  manualOverrideQty: r.manual_override_qty === null || r.manual_override_qty === void 0 ? null : Number(r.manual_override_qty),
+  computedAt: r.computed_at
+});
+async function upsertReorderSuggestions(tenantId, rows) {
+  for (const r of rows) {
+    await query(`INSERT INTO reorder_suggestions
+         (tenant_id, menu_item_id, current_qty, avg_daily_sales, days_of_stock_left, suggested_order_qty, suggested_order_date, urgency, rationale, computed_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+       ON CONFLICT (tenant_id, menu_item_id) DO UPDATE SET
+         current_qty = EXCLUDED.current_qty,
+         avg_daily_sales = EXCLUDED.avg_daily_sales,
+         days_of_stock_left = EXCLUDED.days_of_stock_left,
+         suggested_order_qty = EXCLUDED.suggested_order_qty,
+         suggested_order_date = EXCLUDED.suggested_order_date,
+         urgency = EXCLUDED.urgency,
+         rationale = EXCLUDED.rationale,
+         computed_at = now()`, [
+      tenantId,
+      r.menuItemId,
+      r.currentQty,
+      r.avgDailySales,
+      r.daysOfStockLeft,
+      r.suggestedOrderQty,
+      r.suggestedOrderDate,
+      r.urgency,
+      r.rationale
+    ]);
+  }
+}
+async function listReorderSuggestions(tenantId) {
+  const rows = await query(`SELECT rs.*, m.name
+     FROM reorder_suggestions rs
+     JOIN menu_items m ON m.id = rs.menu_item_id AND m.tenant_id = rs.tenant_id
+     WHERE rs.tenant_id = $1
+     ORDER BY rs.days_of_stock_left ASC NULLS LAST`, [tenantId]);
+  return rows.map(mapReorderSuggestion);
+}
+async function setManualOverrideQty(tenantId, menuItemId, qty) {
+  await query(`UPDATE reorder_suggestions SET manual_override_qty = $3 WHERE tenant_id = $1 AND menu_item_id = $2`, [tenantId, menuItemId, qty]);
+}
+
+// ../../packages/db/dist/repos-tenant-secrets.js
+async function getTenantAiProviderInfo(tenantId) {
+  const row = await queryOne(`SELECT provider, api_key, model FROM tenant_secrets WHERE tenant_id = $1`, [tenantId]);
+  return {
+    hasApiKey: Boolean(row?.api_key),
+    provider: row?.provider ?? "anthropic",
+    ...row?.model ? { model: row.model } : {}
+  };
+}
+async function getTenantApiKey(tenantId) {
+  const row = await queryOne(`SELECT provider, api_key, model FROM tenant_secrets WHERE tenant_id = $1`, [tenantId]);
+  return {
+    apiKey: row?.api_key ?? null,
+    provider: row?.provider ?? "anthropic",
+    ...row?.model ? { model: row.model } : {}
+  };
+}
+async function setTenantApiKey(tenantId, patch) {
+  await query(`INSERT INTO tenant_secrets (tenant_id, provider, api_key, model, updated_at)
+     VALUES ($1, coalesce($2, 'anthropic'), $3, $4, now())
+     ON CONFLICT (tenant_id) DO UPDATE SET
+       provider = coalesce($2, tenant_secrets.provider),
+       api_key = CASE WHEN $5::boolean THEN $3 ELSE tenant_secrets.api_key END,
+       model = CASE WHEN $6::boolean THEN $4 ELSE tenant_secrets.model END,
+       updated_at = now()`, [
+    tenantId,
+    patch.provider ?? null,
+    patch.apiKey ?? null,
+    patch.model ?? null,
+    "apiKey" in patch,
+    "model" in patch
+  ]);
+}
+async function getTenantChannelInfo(tenantId) {
+  const row = await queryOne(`SELECT whatsapp_mode, whatsapp_phone_number_id, whatsapp_access_token,
+            whatsapp_webhook_verify_token, email_mode, resend_api_key
+     FROM tenant_secrets WHERE tenant_id = $1`, [tenantId]);
+  return {
+    whatsappMode: row?.whatsapp_mode === "live" ? "live" : "stub",
+    hasWhatsappAccessToken: Boolean(row?.whatsapp_access_token),
+    whatsappPhoneNumberId: row?.whatsapp_phone_number_id ?? null,
+    hasWhatsappWebhookVerifyToken: Boolean(row?.whatsapp_webhook_verify_token),
+    emailMode: row?.email_mode === "resend" ? "resend" : "stub",
+    hasResendApiKey: Boolean(row?.resend_api_key)
+  };
+}
+async function getTenantChannelSecrets(tenantId) {
+  const row = await queryOne(`SELECT whatsapp_mode, whatsapp_phone_number_id, whatsapp_access_token,
+            whatsapp_webhook_verify_token, email_mode, resend_api_key
+     FROM tenant_secrets WHERE tenant_id = $1`, [tenantId]);
+  return {
+    whatsappMode: row?.whatsapp_mode ?? (process.env.WHATSAPP_MODE === "live" ? "live" : "stub"),
+    whatsappPhoneNumberId: row?.whatsapp_phone_number_id ?? process.env.WHATSAPP_PHONE_NUMBER_ID,
+    whatsappAccessToken: row?.whatsapp_access_token ?? process.env.WHATSAPP_ACCESS_TOKEN,
+    whatsappWebhookVerifyToken: row?.whatsapp_webhook_verify_token ?? process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN ?? "dev-verify-token",
+    emailMode: row?.email_mode ?? (process.env.EMAIL_MODE === "resend" ? "resend" : "stub"),
+    resendApiKey: row?.resend_api_key ?? process.env.RESEND_API_KEY
+  };
+}
+async function setTenantChannelSecrets(tenantId, patch) {
+  await query(`INSERT INTO tenant_secrets (tenant_id, whatsapp_mode, whatsapp_phone_number_id, whatsapp_access_token, whatsapp_webhook_verify_token, email_mode, resend_api_key, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+     ON CONFLICT (tenant_id) DO UPDATE SET
+       whatsapp_mode = CASE WHEN $8::boolean THEN $2 ELSE tenant_secrets.whatsapp_mode END,
+       whatsapp_phone_number_id = CASE WHEN $9::boolean THEN $3 ELSE tenant_secrets.whatsapp_phone_number_id END,
+       whatsapp_access_token = CASE WHEN $10::boolean THEN $4 ELSE tenant_secrets.whatsapp_access_token END,
+       whatsapp_webhook_verify_token = CASE WHEN $11::boolean THEN $5 ELSE tenant_secrets.whatsapp_webhook_verify_token END,
+       email_mode = CASE WHEN $12::boolean THEN $6 ELSE tenant_secrets.email_mode END,
+       resend_api_key = CASE WHEN $13::boolean THEN $7 ELSE tenant_secrets.resend_api_key END,
+       updated_at = now()`, [
+    tenantId,
+    patch.whatsappMode ?? null,
+    patch.whatsappPhoneNumberId ?? null,
+    patch.whatsappAccessToken ?? null,
+    patch.whatsappWebhookVerifyToken ?? null,
+    patch.emailMode ?? null,
+    patch.resendApiKey ?? null,
+    "whatsappMode" in patch,
+    "whatsappPhoneNumberId" in patch,
+    "whatsappAccessToken" in patch,
+    "whatsappWebhookVerifyToken" in patch,
+    "emailMode" in patch,
+    "resendApiKey" in patch
+  ]);
+}
+
 // ../../packages/db/dist/migrate.js
 import fs from "node:fs";
 import path2 from "node:path";
@@ -1715,6 +1946,26 @@ function personalizationDashboardConfig(config) {
 function businessUnitsConfig(config) {
   return config.businessUnits ?? { enabled: false, units: [] };
 }
+function aiAssistConfig(config) {
+  return config.aiAssist ?? { personalization: false, pricing: false };
+}
+function inventoryConfig(config) {
+  return config.inventory ?? {
+    defaultLeadTimeDays: 3,
+    defaultSafetyStockDays: 7,
+    lowStockThresholdDays: 5,
+    autoDecrementFromSales: true
+  };
+}
+var DEFAULT_INVENTORY_WIDGETS = [
+  { id: "default-low-stock", type: "low_stock_alerts" },
+  { id: "default-days-left", type: "days_of_stock_leaderboard" },
+  { id: "default-reorder-queue", type: "reorder_queue" },
+  { id: "default-recent-adjustments", type: "recent_adjustments" }
+];
+function inventoryDashboardConfig(config) {
+  return config.inventoryDashboard ?? { widgets: DEFAULT_INVENTORY_WIDGETS };
+}
 var DEFAULT_PRICING_WIDGETS = [
   { id: "default-recommendation-summary", type: "recommendation_summary" },
   { id: "default-demand-trend-chart", type: "demand_trend_chart" },
@@ -1736,6 +1987,45 @@ async function awardPurchasePoints(tenant, profileId, amount) {
   const points = pointsForPurchase(tenant, amount);
   if (points > 0) {
     await addLoyaltyPoints(tenant.id, profileId, points, `Purchase \u20B9${Math.round(amount)}`);
+  }
+}
+
+// ../../packages/core/dist/inventory.js
+function addDays(base, days) {
+  const d = new Date(base.getTime());
+  d.setDate(d.getDate() + Math.round(days));
+  return d.toISOString().slice(0, 10);
+}
+function computeReorderSuggestion(signal, now) {
+  const avgDailySales = signal.unitsSold90d / 90;
+  const daysOfStockLeft = avgDailySales > 0 ? signal.currentQty / avgDailySales : null;
+  const reorderPoint = signal.reorderPoint ?? avgDailySales * signal.safetyStockDays;
+  const needsReorder = daysOfStockLeft !== null && signal.currentQty <= reorderPoint;
+  const targetCoverDays = signal.safetyStockDays + signal.leadTimeDays;
+  const suggestedOrderQty = avgDailySales > 0 ? Math.max(0, Math.ceil(avgDailySales * targetCoverDays - signal.currentQty)) : 0;
+  const daysUntilOrder = daysOfStockLeft !== null ? Math.max(0, daysOfStockLeft - signal.leadTimeDays) : 0;
+  const suggestedOrderDate = addDays(now, needsReorder ? 0 : Math.ceil(daysUntilOrder));
+  const urgency = daysOfStockLeft === null ? "low" : daysOfStockLeft <= signal.leadTimeDays ? "high" : daysOfStockLeft <= signal.leadTimeDays + signal.safetyStockDays ? "medium" : "low";
+  return {
+    menuItemId: signal.menuItemId,
+    name: signal.name,
+    currentQty: signal.currentQty,
+    avgDailySales,
+    daysOfStockLeft,
+    suggestedOrderQty,
+    suggestedOrderDate,
+    urgency
+  };
+}
+async function decrementStockForSale(tenant, purchasedItems, trackedItemsByName, eventId) {
+  const cfg = inventoryConfig(tenant.config);
+  if (!cfg.autoDecrementFromSales || trackedItemsByName.size === 0)
+    return;
+  for (const item of purchasedItems) {
+    const tracked = trackedItemsByName.get(item.name.toLowerCase());
+    if (!tracked || item.qty <= 0)
+      continue;
+    await recordStockAdjustment(tenant.id, tracked.menuItemId, -item.qty, "sale", eventId ? `Purchase event ${eventId}` : "Purchase");
   }
 }
 
@@ -1799,6 +2089,13 @@ function parseItemsCell(cell, mapping) {
   }).filter((it) => it.name.length > 0);
 }
 async function ingestNormalizedEvents(tenant, events) {
+  const autoDecrement = inventoryConfig(tenant.config).autoDecrementFromSales;
+  const trackedItemsByName = /* @__PURE__ */ new Map();
+  if (autoDecrement && events.some((e) => e.eventType === "purchase")) {
+    const tracked = await listMenuItemsWithStock(tenant.id, { trackedOnly: true });
+    for (const item of tracked)
+      trackedItemsByName.set(item.name.toLowerCase(), { menuItemId: item.id });
+  }
   let processed = 0;
   for (const e of events) {
     const profile = await upsertProfile(tenant.id, e.phone, e.traits ?? {});
@@ -1806,6 +2103,7 @@ async function ingestNormalizedEvents(tenant, events) {
     if (e.eventType === "purchase") {
       await addWhatsappOptIn(tenant.id, e.phone, "pos_import");
       await awardPurchasePoints(tenant, profile.id, e.amount);
+      await decrementStockForSale(tenant, e.items, trackedItemsByName);
     }
     processed++;
   }
@@ -2431,11 +2729,12 @@ async function sendTransactionalWhatsApp(tenant, profile, kind, body) {
   const optedOut = await getOptedOutPhones(tenant.id);
   const blocked = optedOut.has(profile.phone);
   let liveSendFailed = false;
-  if (!blocked && process.env.WHATSAPP_MODE === "live") {
-    const res = await fetch(`${GRAPH_API_BASE}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+  const secrets = await getTenantChannelSecrets(tenant.id);
+  if (!blocked && secrets.whatsappMode === "live") {
+    const res = await fetch(`${GRAPH_API_BASE}/${secrets.whatsappPhoneNumberId}/messages`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
+        Authorization: `Bearer ${secrets.whatsappAccessToken}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
@@ -2547,11 +2846,9 @@ var cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 // ../../packages/channels/dist/whatsapp.js
 var GRAPH_API_BASE2 = "https://graph.facebook.com/v20.0";
 var NAME_FROM_MESSAGE_RE = /this is\s+([^,]{1,80}),\s*adding my order/i;
-function mode() {
-  return process.env.WHATSAPP_MODE === "live" ? "live" : "stub";
-}
 async function ensureCampaignTemplate(tenant, campaignType, templateBody, variables) {
-  const status = mode() === "stub" ? "approved" : "submitted";
+  const secrets = await getTenantChannelSecrets(tenant.id);
+  const status = secrets.whatsappMode === "stub" ? "approved" : "submitted";
   await upsertWhatsappTemplate({
     tenantId: tenant.id,
     name: `${campaignType}_${hashish(templateBody)}`,
@@ -2560,7 +2857,7 @@ async function ensureCampaignTemplate(tenant, campaignType, templateBody, variab
     status,
     campaignType
   });
-  if (mode() === "live") {
+  if (secrets.whatsappMode === "live") {
   }
   return { approved: status === "approved" };
 }
@@ -2576,13 +2873,14 @@ async function sendViaWhatsApp(tenant, profile, renderedText, meta) {
       error: `no approved WhatsApp template for campaign type "${meta.campaignType}"`
     };
   }
-  if (mode() === "stub") {
+  const secrets = await getTenantChannelSecrets(tenant.id);
+  if (secrets.whatsappMode === "stub") {
     return { ok: true, providerMessageId: `stub-wa-${meta.messageId}` };
   }
-  const res = await fetch(`${GRAPH_API_BASE2}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+  const res = await fetch(`${GRAPH_API_BASE2}/${secrets.whatsappPhoneNumberId}/messages`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
+      Authorization: `Bearer ${secrets.whatsappAccessToken}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
@@ -2735,13 +3033,14 @@ async function sendViaEmail(tenant, profile, renderedText, meta) {
   if (!tenant.config.channels.email.enabled) {
     return { ok: false, error: "email channel disabled for tenant" };
   }
-  if (process.env.EMAIL_MODE !== "resend") {
+  const secrets = await getTenantChannelSecrets(tenant.id);
+  if (secrets.emailMode !== "resend") {
     return { ok: true, providerMessageId: `stub-email-${meta.messageId}` };
   }
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+      Authorization: `Bearer ${secrets.resendApiKey}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
@@ -2760,12 +3059,13 @@ async function sendInvoiceEmail(tenant, profile, invoice, printUrl) {
   const email = typeof profile.traits.email === "string" ? profile.traits.email : null;
   if (!email || !tenant.config.channels.email.enabled)
     return { status: "failed" };
-  if (process.env.EMAIL_MODE !== "resend")
+  const secrets = await getTenantChannelSecrets(tenant.id);
+  if (secrets.emailMode !== "resend")
     return { status: "sent" };
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+      Authorization: `Bearer ${secrets.resendApiKey}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
@@ -2900,7 +3200,8 @@ function nearestFestivalName(tenant) {
 async function sendDirectMessage(tenant, profile, body, sentBy) {
   const optedOut = await getOptedOutPhones(tenant.id);
   const blocked = optedOut.has(profile.phone);
-  if (!blocked && process.env.WHATSAPP_MODE === "live") {
+  const secrets = await getTenantChannelSecrets(tenant.id);
+  if (!blocked && secrets.whatsappMode === "live") {
   }
   return insertDirectMessage({
     tenantId: tenant.id,
@@ -3327,28 +3628,77 @@ appRouter.put("/settings/business-units", async (req, res) => {
   await patchTenantConfig(tenant.id, { businessUnits: { enabled, units } });
   res.json({ enabled, units });
 });
+appRouter.get("/settings/ai-assist", async (req, res) => {
+  const tenant = req.tenant;
+  const info = await getTenantAiProviderInfo(tenant.id);
+  res.json({ aiAssist: aiAssistConfig(tenant.config), ...info });
+});
+appRouter.put("/settings/ai-assist", async (req, res) => {
+  const tenant = req.tenant;
+  const body = req.body ?? {};
+  await patchTenantConfig(tenant.id, {
+    aiAssist: {
+      personalization: Boolean(body.personalization),
+      pricing: Boolean(body.pricing)
+    }
+  });
+  const secretPatch = {};
+  if (typeof body.provider === "string" && body.provider.trim()) secretPatch.provider = body.provider.trim().toLowerCase();
+  if (typeof body.apiKey === "string") secretPatch.apiKey = body.apiKey.trim() || null;
+  if ("model" in body) secretPatch.model = typeof body.model === "string" && body.model.trim() ? body.model.trim() : null;
+  if (Object.keys(secretPatch).length > 0) {
+    await setTenantApiKey(tenant.id, secretPatch);
+  }
+  res.json({ ok: true });
+});
 appRouter.get("/settings", async (req, res) => {
   const tenant = req.tenant;
+  const secrets = await getTenantChannelSecrets(tenant.id);
   res.json({
     shopName: tenant.config.branding.shopName,
     branding: tenant.config.branding,
     whatsapp: {
       number: tenant.whatsappNumber,
-      mode: process.env.WHATSAPP_MODE === "live" ? "live" : "stub",
-      connected: process.env.WHATSAPP_MODE === "live"
+      mode: secrets.whatsappMode,
+      connected: secrets.whatsappMode === "live"
     },
     email: tenant.config.channels.email,
     apiKey: tenant.apiKey,
     festivals: tenant.config.festivals
   });
 });
+appRouter.get("/settings/channels", async (req, res) => {
+  res.json(await getTenantChannelInfo(req.tenant.id));
+});
+appRouter.put("/settings/channels", async (req, res) => {
+  const tenant = req.tenant;
+  const body = req.body ?? {};
+  const patch = {};
+  if (body.whatsappMode === "live" || body.whatsappMode === "stub") patch.whatsappMode = body.whatsappMode;
+  if (typeof body.whatsappPhoneNumberId === "string") patch.whatsappPhoneNumberId = body.whatsappPhoneNumberId.trim() || null;
+  if (typeof body.whatsappAccessToken === "string") patch.whatsappAccessToken = body.whatsappAccessToken.trim() || null;
+  if (typeof body.whatsappWebhookVerifyToken === "string") {
+    patch.whatsappWebhookVerifyToken = body.whatsappWebhookVerifyToken.trim() || null;
+  }
+  if (body.emailMode === "resend" || body.emailMode === "stub") patch.emailMode = body.emailMode;
+  if (typeof body.resendApiKey === "string") patch.resendApiKey = body.resendApiKey.trim() || null;
+  if (Object.keys(patch).length > 0) {
+    await setTenantChannelSecrets(tenant.id, patch);
+  }
+  res.json({ ok: true });
+});
 
 // src/routes/webhooks.ts
 import { Router as Router3 } from "express";
 var webhooksRouter = Router3();
-webhooksRouter.get("/whatsapp/:tenantSlug", (req, res) => {
-  const verifyToken = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN ?? "dev-verify-token";
-  if (req.query["hub.mode"] === "subscribe" && req.query["hub.verify_token"] === verifyToken) {
+webhooksRouter.get("/whatsapp/:tenantSlug", async (req, res) => {
+  const tenant = await getTenantBySlug(req.params.tenantSlug);
+  if (!tenant) {
+    res.sendStatus(404);
+    return;
+  }
+  const secrets = await getTenantChannelSecrets(tenant.id);
+  if (req.query["hub.mode"] === "subscribe" && req.query["hub.verify_token"] === secrets.whatsappWebhookVerifyToken) {
     res.send(req.query["hub.challenge"]);
     return;
   }
@@ -9438,6 +9788,17 @@ var AnthropicCopyProvider = class {
       throw new Error("expected an array of pricing rationales");
     return parsed;
   }
+  async writeInventoryRationale(req) {
+    const text = await this.ask([
+      `You explain stock-reorder suggestions for "${req.shopName}", a small Indian retail shop, to its owner.`,
+      `For each item below, write ONE short reason (max 140 chars, plain language, no jargon) the owner can read before deciding whether to place the order.`,
+      `Reply with JSON ONLY: an array of {"menuItemId", "rationale"}, one per item, same order as given.`
+    ].join("\n"), req.items.map((it) => `- ${it.menuItemId}: "${it.name}", days of stock left: ${it.daysOfStockLeft ?? "unknown"}, suggested order qty: ${it.suggestedOrderQty}, urgency: ${it.urgency}`).join("\n"));
+    const parsed = parseJson(text);
+    if (!Array.isArray(parsed))
+      throw new Error("expected an array of inventory rationales");
+    return parsed;
+  }
   /** One system+user round trip, text back. */
   async ask(system, user) {
     const response = await this.client.messages.create({
@@ -9580,6 +9941,12 @@ var MockCopyProvider = class {
       return { menuItemId: it.menuItemId, rationale };
     });
   }
+  async writeInventoryRationale(req) {
+    return req.items.map((it) => {
+      const rationale = it.daysOfStockLeft === null ? "Not enough sales history yet to estimate how long stock will last." : it.urgency === "high" ? `At current sales pace, stock runs out in about ${Math.round(it.daysOfStockLeft)} day(s) \u2014 reorder soon.` : it.urgency === "medium" ? `Stock is comfortable for now but worth planning a reorder soon.` : `Stock is well ahead of current sales pace.`;
+      return { menuItemId: it.menuItemId, rationale };
+    });
+  }
 };
 function capitalize(s) {
   const t = s.trim();
@@ -9590,8 +9957,19 @@ function lc(s) {
 }
 
 // ../../packages/ai/dist/index.js
-function defaultProvider() {
-  return process.env.ANTHROPIC_API_KEY ? new AnthropicCopyProvider() : new MockCopyProvider();
+var PROVIDER_FACTORIES = {
+  anthropic: (opts) => new AnthropicCopyProvider(opts)
+};
+function defaultProvider(selection) {
+  if (!selection || !selection.aiAssistEnabled)
+    return new MockCopyProvider();
+  const provider = selection.provider ?? process.env.AI_PROVIDER ?? "anthropic";
+  const factory = PROVIDER_FACTORIES[provider] ?? PROVIDER_FACTORIES.anthropic;
+  if (selection.apiKey) {
+    return factory({ apiKey: selection.apiKey, model: selection.model ?? process.env.AI_MODEL });
+  }
+  const envKey = process.env.AI_API_KEY ?? process.env.ANTHROPIC_API_KEY;
+  return envKey ? factory({ apiKey: envKey, model: selection.model ?? process.env.AI_MODEL }) : new MockCopyProvider();
 }
 async function generateCampaignCopy(req, provider = defaultProvider()) {
   const result = await provider.generateTemplate(req);
@@ -9661,6 +10039,32 @@ async function generatePricingRationale(req, provider = defaultProvider()) {
   }
   return rationales;
 }
+function fallbackInventoryRationale(item) {
+  if (item.daysOfStockLeft === null)
+    return "Not enough sales history yet to estimate how long stock will last.";
+  return item.urgency === "high" ? `At current sales pace, stock runs out in about ${Math.round(item.daysOfStockLeft)} day(s) \u2014 reorder soon.` : item.urgency === "medium" ? `Stock is comfortable for now but worth planning a reorder soon.` : `Stock is well ahead of current sales pace.`;
+}
+async function generateInventoryRationale(req, provider = defaultProvider()) {
+  const byId = new Map(req.items.map((it) => [it.menuItemId, it]));
+  let results = [];
+  try {
+    results = await provider.writeInventoryRationale(req);
+  } catch {
+    results = [];
+  }
+  const rationales = {};
+  for (const r of results) {
+    if (byId.has(r.menuItemId) && typeof r.rationale === "string" && r.rationale.trim()) {
+      rationales[r.menuItemId] = r.rationale.trim().slice(0, 200);
+    }
+  }
+  for (const item of req.items) {
+    if (!rationales[item.menuItemId]) {
+      rationales[item.menuItemId] = fallbackInventoryRationale(item);
+    }
+  }
+  return rationales;
+}
 
 // ../../packages/jobs/dist/copy-generator.js
 var import_dayjs4 = __toESM(require_dayjs_min(), 1);
@@ -9689,7 +10093,15 @@ function makeCopyGenerator() {
       festival,
       newItems
     };
-    const copy = await generateCampaignCopy(request);
+    const assist = aiAssistConfig(tenant.config);
+    const secret = assist.personalization ? await getTenantApiKey(tenant.id) : null;
+    const provider = defaultProvider({
+      aiAssistEnabled: assist.personalization,
+      provider: secret?.provider,
+      apiKey: secret?.apiKey,
+      model: secret?.model
+    });
+    const copy = await generateCampaignCopy(request, provider);
     const samples = sample.slice(0, 3).map(({ profile, features }) => ({
       profileId: profile.id,
       rendered: renderTemplate(copy.template, variablesForProfile(profile, features, {
@@ -9741,6 +10153,14 @@ async function buildCounterCard(tenant, profileId, opts = {}) {
   ]);
   const features = featuresArr[0] ?? null;
   const firstName = typeof profile.traits.name === "string" && profile.traits.name ? profile.traits.name.split(" ")[0] : null;
+  const assist = aiAssistConfig(tenant.config);
+  const secret = assist.personalization ? await getTenantApiKey(tenant.id) : null;
+  const provider = defaultProvider({
+    aiAssistEnabled: assist.personalization,
+    provider: secret?.provider,
+    apiKey: secret?.apiKey,
+    model: secret?.model
+  });
   const pitch = await generateCounterPitch({
     shopName: tenant.config.branding.shopName,
     brandVoice: tenant.config.brandVoice,
@@ -9752,7 +10172,7 @@ async function buildCounterCard(tenant, profileId, opts = {}) {
     },
     recommendations,
     activeFestival: inputs.festival?.name ?? null
-  });
+  }, provider);
   const card = {
     profileId,
     name: typeof profile.traits.name === "string" ? profile.traits.name : null,
@@ -9802,6 +10222,14 @@ async function refreshPricingRecommendations(tenant, opts = {}) {
       safetyNetEnabled: config.safetyNetEnabled
     });
   });
+  const assist = aiAssistConfig(tenant.config);
+  const secret = assist.pricing ? await getTenantApiKey(tenant.id) : null;
+  const provider = defaultProvider({
+    aiAssistEnabled: assist.pricing,
+    provider: secret?.provider,
+    apiKey: secret?.apiKey,
+    model: secret?.model
+  });
   const rationaleByItem = await generatePricingRationale({
     shopName: tenant.config.branding.shopName,
     occasion: config.occasion ?? activeFestival?.name ?? null,
@@ -9812,7 +10240,7 @@ async function refreshPricingRecommendations(tenant, opts = {}) {
       suggestedPrice: r.suggestedPrice,
       demandTrend: r.demandTrend
     }))
-  });
+  }, provider);
   const rows = recommendations.map((r) => ({
     menuItemId: r.menuItemId,
     currentPrice: r.currentPrice,
@@ -9872,6 +10300,68 @@ async function runPricingPipelineNow(tenant, pipelineId) {
   return result;
 }
 
+// ../../packages/jobs/dist/predict-inventory.js
+async function refreshReorderSuggestions(tenant) {
+  const config = inventoryConfig(tenant.config);
+  const items = await listMenuItemsWithStock(tenant.id, { trackedOnly: true });
+  if (items.length === 0)
+    return [];
+  const salesByName = await tenantItemSalesByName(tenant.id);
+  const now = /* @__PURE__ */ new Date();
+  const computed = items.map((item) => {
+    const signal = salesByName.get(item.name.toLowerCase()) ?? { unitsSold90d: 0, unitsSoldPrior90d: 0 };
+    return computeReorderSuggestion({
+      menuItemId: item.id,
+      name: item.name,
+      currentQty: item.currentQty,
+      unitsSold90d: signal.unitsSold90d,
+      leadTimeDays: item.leadTimeDays ?? config.defaultLeadTimeDays,
+      reorderPoint: item.reorderPoint,
+      safetyStockDays: config.defaultSafetyStockDays
+    }, now);
+  });
+  const assist = aiAssistConfig(tenant.config);
+  const secret = assist.pricing ? await getTenantApiKey(tenant.id) : null;
+  const provider = defaultProvider({
+    aiAssistEnabled: assist.pricing,
+    provider: secret?.provider,
+    apiKey: secret?.apiKey,
+    model: secret?.model
+  });
+  let rationaleByItem = {};
+  try {
+    rationaleByItem = await generateInventoryRationale({
+      shopName: tenant.config.branding.shopName,
+      items: computed.map((c) => ({
+        menuItemId: c.menuItemId,
+        name: c.name,
+        daysOfStockLeft: c.daysOfStockLeft,
+        suggestedOrderQty: c.suggestedOrderQty,
+        urgency: c.urgency
+      }))
+    }, provider);
+  } catch {
+    rationaleByItem = {};
+  }
+  const rows = computed.map((c) => ({
+    menuItemId: c.menuItemId,
+    currentQty: c.currentQty,
+    avgDailySales: c.avgDailySales,
+    daysOfStockLeft: c.daysOfStockLeft,
+    suggestedOrderQty: c.suggestedOrderQty,
+    suggestedOrderDate: c.suggestedOrderDate,
+    urgency: c.urgency,
+    rationale: rationaleByItem[c.menuItemId] ?? null
+  }));
+  await upsertReorderSuggestions(tenant.id, rows);
+  return rows.map((r) => ({
+    ...r,
+    name: computed.find((c) => c.menuItemId === r.menuItemId).name,
+    manualOverrideQty: null,
+    computedAt: now.toISOString()
+  }));
+}
+
 // src/routes/segments.ts
 var segmentsRouter = Router5();
 async function contextFor(tenant) {
@@ -9885,6 +10375,16 @@ async function contextFor(tenant) {
     },
     stats
   };
+}
+async function providerFor(tenant) {
+  const assist = aiAssistConfig(tenant.config);
+  const secret = assist.personalization ? await getTenantApiKey(tenant.id) : null;
+  return defaultProvider({
+    aiAssistEnabled: assist.personalization,
+    provider: secret?.provider,
+    apiKey: secret?.apiKey,
+    model: secret?.model
+  });
 }
 async function previewRule(tenant, rule) {
   const { whereSql, params } = compileRule(rule);
@@ -9911,7 +10411,7 @@ segmentsRouter.post("/segments/preview", async (req, res) => {
   }
   try {
     const { context } = await contextFor(tenant);
-    const proposal = await authorSegmentFromPrompt({ prompt, context });
+    const proposal = await authorSegmentFromPrompt({ prompt, context }, await providerFor(tenant));
     const audienceSize = await previewRule(tenant, proposal.rule);
     res.json({ proposal: { ...proposal, audienceSize } });
   } catch (err) {
@@ -9924,16 +10424,19 @@ segmentsRouter.post("/segments/discover", async (req, res) => {
   const tenant = req.tenant;
   const { context, stats } = await contextFor(tenant);
   const existing = await listSegments(tenant.id);
-  const proposals = await discoverSegments({
-    context,
-    stats: {
-      recencyBuckets: stats.recencyBuckets,
-      categorySpend: stats.categorySpend,
-      festivalBuyers: stats.festivalBuyers,
-      withCadence: stats.withCadence
+  const proposals = await discoverSegments(
+    {
+      context,
+      stats: {
+        recencyBuckets: stats.recencyBuckets,
+        categorySpend: stats.categorySpend,
+        festivalBuyers: stats.festivalBuyers,
+        withCadence: stats.withCadence
+      },
+      existingSegmentNames: existing.map((s) => s.name)
     },
-    existingSegmentNames: existing.map((s) => s.name)
-  });
+    await providerFor(tenant)
+  );
   const sized = [];
   for (const p of proposals) {
     try {
@@ -10794,6 +11297,292 @@ pricingRouter.post("/pricing/pipelines/:id/run", async (req, res) => {
   res.json(result);
 });
 
+// src/routes/inventory.ts
+import { Router as Router11 } from "express";
+import multer3 from "multer";
+import * as XLSX from "xlsx";
+var inventoryRouter = Router11();
+var upload3 = multer3({ storage: multer3.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
+function parseInventoryFile(buffer, filename) {
+  const ext = (filename.split(".").pop() ?? "").toLowerCase();
+  if (ext === "xlsx" || ext === "xls") {
+    const workbook = XLSX.read(buffer, { type: "buffer" });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+    return rows.map((row) => Object.fromEntries(Object.entries(row).map(([k, v]) => [k, String(v)])));
+  }
+  if (ext === "json") {
+    const parsed = JSON.parse(buffer.toString("utf-8"));
+    if (!Array.isArray(parsed)) throw new Error("JSON file must contain an array of row objects");
+    return parsed.map((row) => Object.fromEntries(Object.entries(row).map(([k, v]) => [k, String(v)])));
+  }
+  if (ext === "tsv") {
+    const lines = buffer.toString("utf-8").split(/\r\n|\n/).filter((l) => l.length > 0);
+    if (lines.length === 0) return [];
+    const headers = lines[0].split("	").map((h) => h.trim());
+    return lines.slice(1).map((line) => {
+      const cells = line.split("	");
+      return Object.fromEntries(headers.map((h, i) => [h, cells[i] ?? ""]));
+    });
+  }
+  return parseCsv(buffer.toString("utf-8"));
+}
+var INVENTORY_WIDGET_TYPES = [
+  "low_stock_alerts",
+  "days_of_stock_leaderboard",
+  "reorder_queue",
+  "recent_adjustments",
+  "top_movers"
+];
+function csvField3(value) {
+  const s = value === null || value === void 0 ? "" : String(value);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+function toCsv3(headers, rows) {
+  return [headers, ...rows].map((row) => row.map(csvField3).join(",")).join("\r\n");
+}
+inventoryRouter.use((req, res, next) => {
+  if (!req.tenant.config.modules.inventory?.enabled) {
+    res.status(403).json({ error: "Inventory is not enabled for this account" });
+    return;
+  }
+  next();
+});
+inventoryRouter.get("/settings/inventory", (req, res) => {
+  res.json({ inventory: inventoryConfig(req.tenant.config) });
+});
+inventoryRouter.put("/settings/inventory", async (req, res) => {
+  const tenant = req.tenant;
+  const current = inventoryConfig(tenant.config);
+  const body = req.body?.inventory ?? {};
+  const patch = {
+    inventory: {
+      defaultLeadTimeDays: Math.max(0, Math.min(90, Number(body.defaultLeadTimeDays ?? current.defaultLeadTimeDays))),
+      defaultSafetyStockDays: Math.max(0, Math.min(90, Number(body.defaultSafetyStockDays ?? current.defaultSafetyStockDays))),
+      lowStockThresholdDays: Math.max(0, Math.min(90, Number(body.lowStockThresholdDays ?? current.lowStockThresholdDays))),
+      autoDecrementFromSales: Boolean(body.autoDecrementFromSales ?? current.autoDecrementFromSales)
+    }
+  };
+  await patchTenantConfig(tenant.id, patch);
+  res.json({ ok: true });
+});
+inventoryRouter.get("/settings/inventory-dashboard", (req, res) => {
+  res.json({ dashboard: inventoryDashboardConfig(req.tenant.config) });
+});
+inventoryRouter.put("/settings/inventory-dashboard", async (req, res) => {
+  const tenant = req.tenant;
+  const widgetsBody = Array.isArray(req.body?.dashboard?.widgets) ? req.body.dashboard.widgets : [];
+  const widgets = widgetsBody.filter((w) => INVENTORY_WIDGET_TYPES.includes(w.type)).map((w) => ({
+    id: String(w.id ?? "").trim() || `widget-${Math.random().toString(36).slice(2, 10)}`,
+    type: w.type,
+    ...w.title ? { title: String(w.title).slice(0, 60) } : {}
+  }));
+  await patchTenantConfig(tenant.id, { inventoryDashboard: { widgets } });
+  res.json({ dashboard: { widgets } });
+});
+inventoryRouter.get("/inventory/items", async (req, res) => {
+  res.json({ items: await listMenuItemsWithStock(req.tenant.id) });
+});
+inventoryRouter.post("/inventory/items", async (req, res) => {
+  const tenant = req.tenant;
+  const body = req.body ?? {};
+  const name = String(body.name ?? "").trim();
+  if (!name) {
+    res.status(400).json({ error: "name is required" });
+    return;
+  }
+  const item = await upsertMenuItem(tenant.id, {
+    name,
+    category: String(body.category ?? "uncategorized").trim() || "uncategorized",
+    price: Math.max(0, Number(body.price) || 0),
+    tags: Array.isArray(body.tags) ? body.tags.map(String).slice(0, 10) : []
+  });
+  await updateMenuItemStockSettings(tenant.id, item.id, {
+    trackStock: true,
+    unit: String(body.unit ?? "unit").trim().slice(0, 20) || "unit",
+    reorderPoint: body.reorderPoint !== void 0 && body.reorderPoint !== null ? Math.max(0, Number(body.reorderPoint)) : null,
+    leadTimeDays: body.leadTimeDays !== void 0 && body.leadTimeDays !== null ? Math.max(0, Math.round(Number(body.leadTimeDays))) : null
+  });
+  const initialQty = Math.max(0, Number(body.initialQty) || 0);
+  if (initialQty > 0) {
+    await recordStockAdjustment(tenant.id, item.id, initialQty, "restock", "Initial stock (new item)");
+  }
+  res.json({ item: await getMenuItemStock(tenant.id, item.id) });
+});
+inventoryRouter.patch("/inventory/items/:id", async (req, res) => {
+  const tenant = req.tenant;
+  const body = req.body ?? {};
+  const catalogPatch = {};
+  if (typeof body.name === "string" && body.name.trim()) catalogPatch.name = body.name.trim();
+  if (typeof body.category === "string" && body.category.trim()) catalogPatch.category = body.category.trim();
+  if ("price" in body) catalogPatch.price = Math.max(0, Number(body.price) || 0);
+  if (Array.isArray(body.tags)) catalogPatch.tags = body.tags.map(String).slice(0, 10);
+  if (Object.keys(catalogPatch).length > 0) {
+    const updated = await updateMenuItem(tenant.id, req.params.id, catalogPatch);
+    if (!updated) {
+      res.status(404).json({ error: "item not found" });
+      return;
+    }
+  }
+  const stockPatch = {};
+  if (typeof body.trackStock === "boolean") stockPatch.trackStock = body.trackStock;
+  if (typeof body.unit === "string" && body.unit.trim()) stockPatch.unit = body.unit.trim().slice(0, 20);
+  if ("reorderPoint" in body) stockPatch.reorderPoint = body.reorderPoint === null ? null : Math.max(0, Number(body.reorderPoint));
+  if ("leadTimeDays" in body) stockPatch.leadTimeDays = body.leadTimeDays === null ? null : Math.max(0, Math.round(Number(body.leadTimeDays)));
+  const item = Object.keys(stockPatch).length > 0 ? await updateMenuItemStockSettings(tenant.id, req.params.id, stockPatch) : await getMenuItemStock(tenant.id, req.params.id);
+  if (!item) {
+    res.status(404).json({ error: "item not found" });
+    return;
+  }
+  res.json({ item });
+});
+inventoryRouter.post("/inventory/items/:id/adjust", async (req, res) => {
+  const tenant = req.tenant;
+  const delta = Number(req.body?.delta);
+  const reason = String(req.body?.reason ?? "").trim().slice(0, 200) || "Manual adjustment";
+  if (!Number.isFinite(delta) || delta === 0) {
+    res.status(400).json({ error: "delta must be a non-zero number" });
+    return;
+  }
+  await recordStockAdjustment(tenant.id, req.params.id, delta, "manual", reason);
+  res.json({ ok: true });
+});
+inventoryRouter.post("/inventory/items/:id/set-quantity", async (req, res) => {
+  const tenant = req.tenant;
+  const qty = Number(req.body?.qty);
+  const reason = String(req.body?.reason ?? "").trim().slice(0, 200) || "Manual quantity edit";
+  if (!Number.isFinite(qty) || qty < 0) {
+    res.status(400).json({ error: "qty must be a non-negative number" });
+    return;
+  }
+  const current = await getMenuItemStock(tenant.id, req.params.id);
+  if (!current) {
+    res.status(404).json({ error: "item not found" });
+    return;
+  }
+  const delta = qty - current.currentQty;
+  if (delta !== 0) {
+    await recordStockAdjustment(tenant.id, req.params.id, delta, "manual", reason);
+  }
+  res.json({ item: await getMenuItemStock(tenant.id, req.params.id) });
+});
+inventoryRouter.post("/inventory/items/:id/restock", async (req, res) => {
+  const tenant = req.tenant;
+  const qty = Number(req.body?.qty);
+  const reason = String(req.body?.reason ?? "").trim().slice(0, 200) || "Restock";
+  if (!Number.isFinite(qty) || qty <= 0) {
+    res.status(400).json({ error: "qty must be a positive number" });
+    return;
+  }
+  await recordStockAdjustment(tenant.id, req.params.id, qty, "restock", reason);
+  res.json({ ok: true });
+});
+inventoryRouter.get("/inventory/items/:id/ledger", async (req, res) => {
+  res.json({ ledger: await listStockLedger(req.tenant.id, req.params.id) });
+});
+inventoryRouter.get("/inventory/ledger", async (req, res) => {
+  res.json({ ledger: await listStockLedger(req.tenant.id, void 0, 30) });
+});
+inventoryRouter.get("/inventory/items/export.csv", async (req, res) => {
+  const items = await listMenuItemsWithStock(req.tenant.id, { trackedOnly: true });
+  const csv = toCsv3(
+    ["name", "category", "price", "unit", "currentQty", "reorderPoint", "leadTimeDays", "tags"],
+    items.map((item) => [
+      item.name,
+      item.category,
+      item.price,
+      item.unit,
+      item.currentQty,
+      item.reorderPoint ?? "",
+      item.leadTimeDays ?? "",
+      item.tags.join(";")
+    ])
+  );
+  res.setHeader("Content-Type", "text/csv");
+  res.setHeader("Content-Disposition", `attachment; filename="inventory-stock-count.csv"`);
+  res.send(csv);
+});
+inventoryRouter.post("/inventory/items/import", upload3.single("file"), async (req, res) => {
+  const tenant = req.tenant;
+  if (!req.file) {
+    res.status(400).json({ error: "file is required" });
+    return;
+  }
+  let rows;
+  try {
+    rows = parseInventoryFile(req.file.buffer, req.file.originalname ?? "upload.csv");
+  } catch (err) {
+    res.status(400).json({ error: `couldn't read that file: ${err instanceof Error ? err.message : err}` });
+    return;
+  }
+  const items = await listMenuItemsWithStock(tenant.id);
+  const byName = new Map(items.map((item) => [item.name.toLowerCase(), item]));
+  const errors = [];
+  let processed = 0;
+  let created = 0;
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    const name = String(row.name ?? "").trim();
+    if (!name) {
+      errors.push({ rowNumber: i + 2, reason: "missing name" });
+      continue;
+    }
+    let item = byName.get(name.toLowerCase());
+    if (!item) {
+      const newItem = await upsertMenuItem(tenant.id, {
+        name,
+        category: String(row.category ?? "uncategorized").trim() || "uncategorized",
+        price: Number(row.price) || 0,
+        tags: row.tags ? row.tags.split(";").map((t) => t.trim()).filter(Boolean) : []
+      });
+      await updateMenuItemStockSettings(tenant.id, newItem.id, { trackStock: true });
+      const stock = await getMenuItemStock(tenant.id, newItem.id);
+      if (!stock) continue;
+      item = { ...newItem, ...stock, branchPrice: null };
+      byName.set(name.toLowerCase(), item);
+      created++;
+    }
+    if ("currentQty" in row && row.currentQty !== "") {
+      const countedQty = Number(row.currentQty);
+      if (Number.isNaN(countedQty)) {
+        errors.push({ rowNumber: i + 2, reason: `invalid currentQty: "${row.currentQty}"` });
+        continue;
+      }
+      const delta = countedQty - item.currentQty;
+      if (delta !== 0) {
+        await recordStockAdjustment(tenant.id, item.id, delta, "manual", "Bulk file import");
+        item.currentQty = countedQty;
+      }
+    }
+    const settingsPatch = {};
+    if (row.unit?.trim()) settingsPatch.unit = row.unit.trim().slice(0, 20);
+    if (row.reorderPoint !== void 0 && row.reorderPoint !== "") settingsPatch.reorderPoint = Math.max(0, Number(row.reorderPoint) || 0);
+    if (row.leadTimeDays !== void 0 && row.leadTimeDays !== "") settingsPatch.leadTimeDays = Math.max(0, Math.round(Number(row.leadTimeDays) || 0));
+    if (Object.keys(settingsPatch).length > 0) {
+      await updateMenuItemStockSettings(tenant.id, item.id, settingsPatch);
+    }
+    processed++;
+  }
+  res.json({ rowsProcessed: processed, itemsCreated: created, errors });
+});
+inventoryRouter.get("/inventory/reorder-suggestions", async (req, res) => {
+  res.json({ suggestions: await listReorderSuggestions(req.tenant.id) });
+});
+inventoryRouter.post("/inventory/reorder-suggestions/recompute", async (req, res) => {
+  const suggestions = await refreshReorderSuggestions(req.tenant);
+  res.json({ suggestions });
+});
+inventoryRouter.put("/inventory/reorder-suggestions/:menuItemId/override", async (req, res) => {
+  const tenant = req.tenant;
+  const qty = req.body?.qty === null ? null : Number(req.body?.qty);
+  if (qty !== null && (!Number.isFinite(qty) || qty < 0)) {
+    res.status(400).json({ error: "qty must be a non-negative number or null" });
+    return;
+  }
+  await setManualOverrideQty(tenant.id, req.params.menuItemId, qty);
+  res.json({ ok: true });
+});
+
 // src/app.ts
 var app = express();
 app.use(cors());
@@ -10820,10 +11609,22 @@ app.use("/v1/app", sessionAuth, menuRouter);
 app.use("/v1/app", sessionAuth, qrOrdersRouter);
 app.use("/v1/app", sessionAuth, billingRouter);
 app.use("/v1/app", sessionAuth, pricingRouter);
+app.use("/v1/app", sessionAuth, inventoryRouter);
 app.use("/v1", apiKeyAuth, ingestRouter);
 app.use("/v1", apiKeyAuth, redemptionsRouter);
 app.use("/v1", apiKeyAuth, counterRouter);
 app.use("/v1", apiKeyAuth, qrOrdersRouter);
+app.use((err, _req, res, _next) => {
+  const pgErr = err;
+  if (pgErr?.code === "23503") {
+    res.status(409).json({
+      error: "Can't complete this \u2014 it still has related records (e.g. inventory stock history). Remove those first."
+    });
+    return;
+  }
+  console.error("[api] unhandled error:", err);
+  res.status(500).json({ error: "internal server error" });
+});
 export {
   app as default
 };

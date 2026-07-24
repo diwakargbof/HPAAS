@@ -2,12 +2,12 @@
 // This is the only wiring point between deterministic logic and the LLM:
 // one generateCampaignCopy call per campaign, cached on the campaign row.
 
-import { generateCampaignCopy, type CopyRequest } from "@hpas/ai";
+import { defaultProvider, generateCampaignCopy, type CopyRequest } from "@hpas/ai";
 import type { CopyGenerationContext, CopyGenerator } from "@hpas/core";
 import { activeFestivalWindow, TEMPLATE_VARIABLES } from "@hpas/core";
 import { renderTemplate, variablesForProfile } from "@hpas/core";
-import { recentMenuItems } from "@hpas/db";
-import type { GeneratedCopy } from "@hpas/types";
+import { getTenantApiKey, recentMenuItems } from "@hpas/db";
+import { aiAssistConfig, type GeneratedCopy } from "@hpas/types";
 import dayjs from "dayjs";
 
 export function makeCopyGenerator(): CopyGenerator {
@@ -47,7 +47,15 @@ export function makeCopyGenerator(): CopyGenerator {
       newItems,
     };
 
-    const copy = await generateCampaignCopy(request);
+    const assist = aiAssistConfig(tenant.config);
+    const secret = assist.personalization ? await getTenantApiKey(tenant.id) : null;
+    const provider = defaultProvider({
+      aiAssistEnabled: assist.personalization,
+      provider: secret?.provider,
+      apiKey: secret?.apiKey,
+      model: secret?.model,
+    });
+    const copy = await generateCampaignCopy(request, provider);
 
     // Pre-render a few examples for the approval queue UI.
     const samples = sample.slice(0, 3).map(({ profile, features }) => ({

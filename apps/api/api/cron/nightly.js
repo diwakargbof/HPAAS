@@ -442,6 +442,17 @@ function pricingConfig(config) {
     items: {}
   };
 }
+function aiAssistConfig(config) {
+  return config.aiAssist ?? { personalization: false, pricing: false };
+}
+function inventoryConfig(config) {
+  return config.inventory ?? {
+    defaultLeadTimeDays: 3,
+    defaultSafetyStockDays: 7,
+    lowStockThresholdDays: 5,
+    autoDecrementFromSales: true
+  };
+}
 
 // ../../node_modules/.pnpm/@anthropic-ai+sdk@0.90.0/node_modules/@anthropic-ai/sdk/internal/tslib.mjs
 function __classPrivateFieldSet(receiver, state, value, kind, f) {
@@ -6462,6 +6473,17 @@ var AnthropicCopyProvider = class {
       throw new Error("expected an array of pricing rationales");
     return parsed;
   }
+  async writeInventoryRationale(req) {
+    const text = await this.ask([
+      `You explain stock-reorder suggestions for "${req.shopName}", a small Indian retail shop, to its owner.`,
+      `For each item below, write ONE short reason (max 140 chars, plain language, no jargon) the owner can read before deciding whether to place the order.`,
+      `Reply with JSON ONLY: an array of {"menuItemId", "rationale"}, one per item, same order as given.`
+    ].join("\n"), req.items.map((it) => `- ${it.menuItemId}: "${it.name}", days of stock left: ${it.daysOfStockLeft ?? "unknown"}, suggested order qty: ${it.suggestedOrderQty}, urgency: ${it.urgency}`).join("\n"));
+    const parsed = parseJson(text);
+    if (!Array.isArray(parsed))
+      throw new Error("expected an array of inventory rationales");
+    return parsed;
+  }
   /** One system+user round trip, text back. */
   async ask(system, user) {
     const response = await this.client.messages.create({
@@ -6604,6 +6626,12 @@ var MockCopyProvider = class {
       return { menuItemId: it.menuItemId, rationale };
     });
   }
+  async writeInventoryRationale(req) {
+    return req.items.map((it) => {
+      const rationale = it.daysOfStockLeft === null ? "Not enough sales history yet to estimate how long stock will last." : it.urgency === "high" ? `At current sales pace, stock runs out in about ${Math.round(it.daysOfStockLeft)} day(s) \u2014 reorder soon.` : it.urgency === "medium" ? `Stock is comfortable for now but worth planning a reorder soon.` : `Stock is well ahead of current sales pace.`;
+      return { menuItemId: it.menuItemId, rationale };
+    });
+  }
 };
 function capitalize(s) {
   const t = s.trim();
@@ -6614,8 +6642,19 @@ function lc(s) {
 }
 
 // ../../packages/ai/dist/index.js
-function defaultProvider() {
-  return process.env.ANTHROPIC_API_KEY ? new AnthropicCopyProvider() : new MockCopyProvider();
+var PROVIDER_FACTORIES = {
+  anthropic: (opts) => new AnthropicCopyProvider(opts)
+};
+function defaultProvider(selection) {
+  if (!selection || !selection.aiAssistEnabled)
+    return new MockCopyProvider();
+  const provider = selection.provider ?? process.env.AI_PROVIDER ?? "anthropic";
+  const factory = PROVIDER_FACTORIES[provider] ?? PROVIDER_FACTORIES.anthropic;
+  if (selection.apiKey) {
+    return factory({ apiKey: selection.apiKey, model: selection.model ?? process.env.AI_MODEL });
+  }
+  const envKey = process.env.AI_API_KEY ?? process.env.ANTHROPIC_API_KEY;
+  return envKey ? factory({ apiKey: envKey, model: selection.model ?? process.env.AI_MODEL }) : new MockCopyProvider();
 }
 async function generateCampaignCopy(req, provider = defaultProvider()) {
   const result = await provider.generateTemplate(req);
@@ -6646,6 +6685,32 @@ async function generatePricingRationale(req, provider = defaultProvider()) {
   for (const item of req.items) {
     if (!rationales[item.menuItemId]) {
       rationales[item.menuItemId] = fallbackPricingRationale(item);
+    }
+  }
+  return rationales;
+}
+function fallbackInventoryRationale(item) {
+  if (item.daysOfStockLeft === null)
+    return "Not enough sales history yet to estimate how long stock will last.";
+  return item.urgency === "high" ? `At current sales pace, stock runs out in about ${Math.round(item.daysOfStockLeft)} day(s) \u2014 reorder soon.` : item.urgency === "medium" ? `Stock is comfortable for now but worth planning a reorder soon.` : `Stock is well ahead of current sales pace.`;
+}
+async function generateInventoryRationale(req, provider = defaultProvider()) {
+  const byId = new Map(req.items.map((it) => [it.menuItemId, it]));
+  let results = [];
+  try {
+    results = await provider.writeInventoryRationale(req);
+  } catch {
+    results = [];
+  }
+  const rationales = {};
+  for (const r of results) {
+    if (byId.has(r.menuItemId) && typeof r.rationale === "string" && r.rationale.trim()) {
+      rationales[r.menuItemId] = r.rationale.trim().slice(0, 200);
+    }
+  }
+  for (const item of req.items) {
+    if (!rationales[item.menuItemId]) {
+      rationales[item.menuItemId] = fallbackInventoryRationale(item);
     }
   }
   return rationales;
@@ -6913,7 +6978,13 @@ var mapMenuItem = (r) => ({
   hsnCode: r.hsn_code ?? null,
   businessUnitIds: r.business_unit_ids ?? [],
   imageUrl: r.image_url ?? null,
-  createdAt: r.created_at
+  createdAt: r.created_at,
+  trackStock: r.track_stock ?? false,
+  currentQty: r.current_qty !== void 0 && r.current_qty !== null ? Number(r.current_qty) : 0,
+  unit: r.unit ?? "unit",
+  reorderPoint: r.reorder_point === null || r.reorder_point === void 0 ? null : Number(r.reorder_point),
+  leadTimeDays: r.lead_time_days === null || r.lead_time_days === void 0 ? null : Number(r.lead_time_days),
+  lastRestockedAt: r.last_restocked_at ?? null
 });
 async function listMenuItems(tenantId, opts = {}) {
   const rows = await query(`SELECT m.*, bp.price AS branch_price
@@ -7014,6 +7085,71 @@ async function markPricingPipelineRun(id, opts = {}) {
      WHERE id = $1`, [id, Boolean(opts.disable)]);
 }
 
+// ../../packages/db/dist/repos-inventory.js
+var mapMenuItemWithStock = (r) => ({
+  id: r.id,
+  tenantId: r.tenant_id,
+  name: r.name,
+  category: r.category,
+  price: Number(r.price),
+  description: r.description,
+  tags: r.tags ?? [],
+  available: r.available,
+  gstRate: r.gst_rate === null || r.gst_rate === void 0 ? null : Number(r.gst_rate),
+  hsnCode: r.hsn_code ?? null,
+  businessUnitIds: r.business_unit_ids ?? [],
+  imageUrl: r.image_url ?? null,
+  createdAt: r.created_at,
+  trackStock: r.track_stock ?? false,
+  currentQty: r.current_qty !== void 0 && r.current_qty !== null ? Number(r.current_qty) : 0,
+  unit: r.unit ?? "unit",
+  reorderPoint: r.reorder_point === null || r.reorder_point === void 0 ? null : Number(r.reorder_point),
+  leadTimeDays: r.lead_time_days === null || r.lead_time_days === void 0 ? null : Number(r.lead_time_days),
+  lastRestockedAt: r.last_restocked_at ?? null,
+  branchPrice: null
+});
+async function listMenuItemsWithStock(tenantId, opts = {}) {
+  const rows = await query(`SELECT * FROM menu_items WHERE tenant_id = $1 ${opts.trackedOnly ? "AND track_stock = true" : ""}
+     ORDER BY category, name`, [tenantId]);
+  return rows.map(mapMenuItemWithStock);
+}
+async function upsertReorderSuggestions(tenantId, rows) {
+  for (const r of rows) {
+    await query(`INSERT INTO reorder_suggestions
+         (tenant_id, menu_item_id, current_qty, avg_daily_sales, days_of_stock_left, suggested_order_qty, suggested_order_date, urgency, rationale, computed_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, now())
+       ON CONFLICT (tenant_id, menu_item_id) DO UPDATE SET
+         current_qty = EXCLUDED.current_qty,
+         avg_daily_sales = EXCLUDED.avg_daily_sales,
+         days_of_stock_left = EXCLUDED.days_of_stock_left,
+         suggested_order_qty = EXCLUDED.suggested_order_qty,
+         suggested_order_date = EXCLUDED.suggested_order_date,
+         urgency = EXCLUDED.urgency,
+         rationale = EXCLUDED.rationale,
+         computed_at = now()`, [
+      tenantId,
+      r.menuItemId,
+      r.currentQty,
+      r.avgDailySales,
+      r.daysOfStockLeft,
+      r.suggestedOrderQty,
+      r.suggestedOrderDate,
+      r.urgency,
+      r.rationale
+    ]);
+  }
+}
+
+// ../../packages/db/dist/repos-tenant-secrets.js
+async function getTenantApiKey(tenantId) {
+  const row = await queryOne(`SELECT provider, api_key, model FROM tenant_secrets WHERE tenant_id = $1`, [tenantId]);
+  return {
+    apiKey: row?.api_key ?? null,
+    provider: row?.provider ?? "anthropic",
+    ...row?.model ? { model: row.model } : {}
+  };
+}
+
 // ../../packages/db/dist/migrate.js
 import fs from "node:fs";
 import path3 from "node:path";
@@ -7059,6 +7195,34 @@ if (process.argv[1] && process.argv[1].includes("migrate")) {
     console.error(err);
     process.exit(1);
   });
+}
+
+// ../../packages/core/dist/inventory.js
+function addDays(base, days) {
+  const d = new Date(base.getTime());
+  d.setDate(d.getDate() + Math.round(days));
+  return d.toISOString().slice(0, 10);
+}
+function computeReorderSuggestion(signal, now) {
+  const avgDailySales = signal.unitsSold90d / 90;
+  const daysOfStockLeft = avgDailySales > 0 ? signal.currentQty / avgDailySales : null;
+  const reorderPoint = signal.reorderPoint ?? avgDailySales * signal.safetyStockDays;
+  const needsReorder = daysOfStockLeft !== null && signal.currentQty <= reorderPoint;
+  const targetCoverDays = signal.safetyStockDays + signal.leadTimeDays;
+  const suggestedOrderQty = avgDailySales > 0 ? Math.max(0, Math.ceil(avgDailySales * targetCoverDays - signal.currentQty)) : 0;
+  const daysUntilOrder = daysOfStockLeft !== null ? Math.max(0, daysOfStockLeft - signal.leadTimeDays) : 0;
+  const suggestedOrderDate = addDays(now, needsReorder ? 0 : Math.ceil(daysUntilOrder));
+  const urgency = daysOfStockLeft === null ? "low" : daysOfStockLeft <= signal.leadTimeDays ? "high" : daysOfStockLeft <= signal.leadTimeDays + signal.safetyStockDays ? "medium" : "low";
+  return {
+    menuItemId: signal.menuItemId,
+    name: signal.name,
+    currentQty: signal.currentQty,
+    avgDailySales,
+    daysOfStockLeft,
+    suggestedOrderQty,
+    suggestedOrderDate,
+    urgency
+  };
 }
 
 // ../../packages/core/dist/ingestion.js
@@ -7476,7 +7640,15 @@ function makeCopyGenerator() {
       festival,
       newItems
     };
-    const copy = await generateCampaignCopy(request);
+    const assist = aiAssistConfig(tenant.config);
+    const secret = assist.personalization ? await getTenantApiKey(tenant.id) : null;
+    const provider = defaultProvider({
+      aiAssistEnabled: assist.personalization,
+      provider: secret?.provider,
+      apiKey: secret?.apiKey,
+      model: secret?.model
+    });
+    const copy = await generateCampaignCopy(request, provider);
     const samples = sample.slice(0, 3).map(({ profile, features }) => ({
       profileId: profile.id,
       rendered: renderTemplate(copy.template, variablesForProfile(profile, features, {
@@ -7538,6 +7710,14 @@ async function refreshPricingRecommendations(tenant, opts = {}) {
       safetyNetEnabled: config.safetyNetEnabled
     });
   });
+  const assist = aiAssistConfig(tenant.config);
+  const secret = assist.pricing ? await getTenantApiKey(tenant.id) : null;
+  const provider = defaultProvider({
+    aiAssistEnabled: assist.pricing,
+    provider: secret?.provider,
+    apiKey: secret?.apiKey,
+    model: secret?.model
+  });
   const rationaleByItem = await generatePricingRationale({
     shopName: tenant.config.branding.shopName,
     occasion: config.occasion ?? activeFestival?.name ?? null,
@@ -7548,7 +7728,7 @@ async function refreshPricingRecommendations(tenant, opts = {}) {
       suggestedPrice: r.suggestedPrice,
       demandTrend: r.demandTrend
     }))
-  });
+  }, provider);
   const rows = recommendations.map((r) => ({
     menuItemId: r.menuItemId,
     currentPrice: r.currentPrice,
@@ -7646,6 +7826,81 @@ async function runDuePricingPipelines() {
   }
 }
 
+// ../../packages/jobs/dist/predict-inventory.js
+async function refreshReorderSuggestions(tenant) {
+  const config = inventoryConfig(tenant.config);
+  const items = await listMenuItemsWithStock(tenant.id, { trackedOnly: true });
+  if (items.length === 0)
+    return [];
+  const salesByName = await tenantItemSalesByName(tenant.id);
+  const now = /* @__PURE__ */ new Date();
+  const computed = items.map((item) => {
+    const signal = salesByName.get(item.name.toLowerCase()) ?? { unitsSold90d: 0, unitsSoldPrior90d: 0 };
+    return computeReorderSuggestion({
+      menuItemId: item.id,
+      name: item.name,
+      currentQty: item.currentQty,
+      unitsSold90d: signal.unitsSold90d,
+      leadTimeDays: item.leadTimeDays ?? config.defaultLeadTimeDays,
+      reorderPoint: item.reorderPoint,
+      safetyStockDays: config.defaultSafetyStockDays
+    }, now);
+  });
+  const assist = aiAssistConfig(tenant.config);
+  const secret = assist.pricing ? await getTenantApiKey(tenant.id) : null;
+  const provider = defaultProvider({
+    aiAssistEnabled: assist.pricing,
+    provider: secret?.provider,
+    apiKey: secret?.apiKey,
+    model: secret?.model
+  });
+  let rationaleByItem = {};
+  try {
+    rationaleByItem = await generateInventoryRationale({
+      shopName: tenant.config.branding.shopName,
+      items: computed.map((c) => ({
+        menuItemId: c.menuItemId,
+        name: c.name,
+        daysOfStockLeft: c.daysOfStockLeft,
+        suggestedOrderQty: c.suggestedOrderQty,
+        urgency: c.urgency
+      }))
+    }, provider);
+  } catch {
+    rationaleByItem = {};
+  }
+  const rows = computed.map((c) => ({
+    menuItemId: c.menuItemId,
+    currentQty: c.currentQty,
+    avgDailySales: c.avgDailySales,
+    daysOfStockLeft: c.daysOfStockLeft,
+    suggestedOrderQty: c.suggestedOrderQty,
+    suggestedOrderDate: c.suggestedOrderDate,
+    urgency: c.urgency,
+    rationale: rationaleByItem[c.menuItemId] ?? null
+  }));
+  await upsertReorderSuggestions(tenant.id, rows);
+  return rows.map((r) => ({
+    ...r,
+    name: computed.find((c) => c.menuItemId === r.menuItemId).name,
+    manualOverrideQty: null,
+    computedAt: now.toISOString()
+  }));
+}
+async function predictInventoryJob() {
+  const tenants = await listTenants();
+  for (const tenant of tenants) {
+    if (!tenant.config.modules.inventory?.enabled)
+      continue;
+    try {
+      const suggestions = await refreshReorderSuggestions(tenant);
+      console.log(`[predict-inventory] ${tenant.name}: computed ${suggestions.length} suggestions`);
+    } catch (err) {
+      console.error(`[predict-inventory] tenant ${tenant.id} failed:`, err);
+    }
+  }
+}
+
 // ../../packages/jobs/dist/compute-features.js
 async function computeFeaturesJob() {
   for (const tenant of await listTenants()) {
@@ -7685,6 +7940,7 @@ async function handler(req, res) {
     await computeFeaturesJob();
     await evaluateTriggersJob();
     await runDuePricingPipelines();
+    await predictInventoryJob();
     res.statusCode = 200;
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify({ ok: true }));

@@ -4,16 +4,17 @@
 // footfall, and a shop's signals don't shift faster than the nightly
 // feature recompute anyway.
 
-import { generateCounterPitch } from "@hpas/ai";
+import { defaultProvider, generateCounterPitch } from "@hpas/ai";
 import { counterRecommendationsFor } from "@hpas/core";
 import {
   cacheCounterCard,
   getCachedCounterCard,
   getFeaturesForProfiles,
   getProfile,
+  getTenantApiKey,
   loyaltyBalance,
 } from "@hpas/db";
-import { loyaltyConfig, type CounterCard, type Tenant } from "@hpas/types";
+import { aiAssistConfig, loyaltyConfig, type CounterCard, type Tenant } from "@hpas/types";
 
 const CACHE_HOURS = 24;
 
@@ -48,18 +49,29 @@ export async function buildCounterCard(
       ? profile.traits.name.split(" ")[0]
       : null;
 
-  const pitch = await generateCounterPitch({
-    shopName: tenant.config.branding.shopName,
-    brandVoice: tenant.config.brandVoice,
-    customer: {
-      firstName,
-      favoriteItem: features?.favoriteItem ?? null,
-      daysSinceLastVisit: features?.recencyDays ?? null,
-      loyaltyBalance: balance,
-    },
-    recommendations,
-    activeFestival: inputs.festival?.name ?? null,
+  const assist = aiAssistConfig(tenant.config);
+  const secret = assist.personalization ? await getTenantApiKey(tenant.id) : null;
+  const provider = defaultProvider({
+    aiAssistEnabled: assist.personalization,
+    provider: secret?.provider,
+    apiKey: secret?.apiKey,
+    model: secret?.model,
   });
+  const pitch = await generateCounterPitch(
+    {
+      shopName: tenant.config.branding.shopName,
+      brandVoice: tenant.config.brandVoice,
+      customer: {
+        firstName,
+        favoriteItem: features?.favoriteItem ?? null,
+        daysSinceLastVisit: features?.recencyDays ?? null,
+        loyaltyBalance: balance,
+      },
+      recommendations,
+      activeFestival: inputs.festival?.name ?? null,
+    },
+    provider
+  );
 
   const card: CounterCard = {
     profileId,

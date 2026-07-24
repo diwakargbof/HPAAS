@@ -5,6 +5,8 @@
 
 import { useEffect, useState } from "react";
 import AppShell from "../../components/AppShell";
+import AiAssistCard from "../../components/AiAssistCard";
+import ChannelsCard from "../../components/ChannelsCard";
 import { api } from "../../lib/api";
 
 interface Settings {
@@ -151,6 +153,10 @@ export default function SettingsPage() {
               Email fallback: {data.email.enabled ? `on (${data.email.fromAddress})` : "off"}
             </div>
           </div>
+
+          <ChannelsCard />
+
+          <AiAssistCard />
 
           <div className="card">
             <div className="section-title">Version</div>

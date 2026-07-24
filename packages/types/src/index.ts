@@ -17,7 +17,8 @@ export type ModuleKey =
   | "settings"
   | "billing"
   | "customers"
-  | "pricing";
+  | "pricing"
+  | "inventory";
 
 export type CampaignType =
   | "winback"
@@ -266,6 +267,106 @@ export interface BusinessUnitsConfig {
 export interface AreasConfig {
   personalization: boolean;
   pricing: boolean;
+  inventory: boolean;
+}
+
+// ---------- AI assist (per-tenant, opt-in LLM usage) ----------
+// Off by default for both surfaces. When a surface is off, every AI call
+// site behaves exactly as it does with no API key configured today (the
+// deterministic MockCopyProvider) — see @hpas/ai's defaultProvider(). This
+// config only holds the two on/off toggles — provider name, model, and the
+// API key itself are never stored here (this config is returned wholesale
+// to the dashboard client), and live in a dedicated `tenant_secrets` DB row
+// instead (packages/db/src/repos-inventory.ts), generic across whichever AI
+// provider/model the tenant configures — not Anthropic-specific.
+
+export interface AiAssistConfig {
+  /** Gates: campaign copy, AI segment authoring, AI segment discovery, counter-pitch. */
+  personalization: boolean;
+  /** Gates: pricing rationale, inventory reorder rationale. */
+  pricing: boolean;
+}
+
+/** Non-secret companion to the API key stored in tenant_secrets — safe to return to the client. */
+export interface AiProviderInfo {
+  hasApiKey: boolean;
+  /** e.g. "anthropic" — free-text so a new backend never needs a schema change. */
+  provider: string;
+  /** Optional model override for that provider, e.g. "claude-opus-4-8". */
+  model?: string;
+}
+
+// ---------- Inventory ----------
+// Stock lives on the existing menu_items catalog (no separate item list) —
+// see the new columns on MenuItem below. Reorder suggestions are computed
+// deterministically from sales velocity (packages/core/src/inventory.ts);
+// an AI rationale is optional and additive, gated by aiAssistConfig().pricing.
+
+export interface InventoryConfig {
+  /** Days between placing an order and it arriving, used when an item has no leadTimeDays of its own. */
+  defaultLeadTimeDays: number;
+  /** Days of cover to keep as a buffer, used when an item has no reorderPoint of its own. */
+  defaultSafetyStockDays: number;
+  /** Days-of-stock-left at or below which an item is flagged low-stock in the dashboard. */
+  lowStockThresholdDays: number;
+  /** Decrement current_qty automatically as sales come in via ingestion, for tracked items. */
+  autoDecrementFromSales: boolean;
+}
+
+export type InventoryWidgetType =
+  | "low_stock_alerts"
+  | "days_of_stock_leaderboard"
+  | "reorder_queue"
+  | "recent_adjustments"
+  | "top_movers";
+
+export interface InventoryWidget {
+  id: string;
+  type: InventoryWidgetType;
+  title?: string;
+}
+
+export interface InventoryDashboardConfig {
+  widgets: InventoryWidget[];
+}
+
+/** Per-tenant stock fields layered onto a MenuItem — see menu_items' new columns. */
+export interface MenuItemStock {
+  menuItemId: string;
+  currentQty: number;
+  unit: string;
+  reorderPoint: number | null;
+  leadTimeDays: number | null;
+  trackStock: boolean;
+  lastRestockedAt: Date | null;
+}
+
+export interface ReorderSuggestion {
+  menuItemId: string;
+  name: string;
+  currentQty: number;
+  avgDailySales: number;
+  /** null = not enough sales history yet to estimate a velocity. */
+  daysOfStockLeft: number | null;
+  suggestedOrderQty: number;
+  /** ISO date. */
+  suggestedOrderDate: string;
+  urgency: "low" | "medium" | "high";
+  /** AI-written, optional — never load-bearing; deterministic fields above always stand alone. */
+  rationale: string | null;
+  manualOverrideQty: number | null;
+  computedAt: string;
+}
+
+export interface StockLedgerEntry {
+  id: string;
+  tenantId: string;
+  menuItemId: string;
+  /** Negative = decrement (sale), positive = restock/correction. */
+  delta: number;
+  source: "sale" | "manual" | "restock";
+  reason: string;
+  createdAt: Date;
 }
 
 export interface TenantConfig {
@@ -297,6 +398,12 @@ export interface TenantConfig {
   businessUnits?: BusinessUnitsConfig;
   /** Optional — defaults applied in code when absent (see areasConfig()). */
   areas?: Partial<AreasConfig>;
+  /** Optional — defaults applied in code when absent (see aiAssistConfig()). Never holds the API key. */
+  aiAssist?: AiAssistConfig;
+  /** Optional — defaults applied in code when absent (see inventoryConfig()). */
+  inventory?: InventoryConfig;
+  /** Optional — defaults applied in code when absent (see inventoryDashboardConfig()). */
+  inventoryDashboard?: InventoryDashboardConfig;
 }
 
 /** Loyalty settings with defaults for tenants configured before the feature existed. */
@@ -365,7 +472,37 @@ export function areasConfig(config: TenantConfig): AreasConfig {
   return {
     personalization: config.areas?.personalization ?? true,
     pricing: config.areas?.pricing ?? true,
+    inventory: config.areas?.inventory ?? true,
   };
+}
+
+/** AI-assist settings: off by default for both surfaces, same as no API key today. */
+export function aiAssistConfig(config: TenantConfig): AiAssistConfig {
+  return config.aiAssist ?? { personalization: false, pricing: false };
+}
+
+/** Inventory settings with defaults for tenants who haven't configured any yet. */
+export function inventoryConfig(config: TenantConfig): InventoryConfig {
+  return (
+    config.inventory ?? {
+      defaultLeadTimeDays: 3,
+      defaultSafetyStockDays: 7,
+      lowStockThresholdDays: 5,
+      autoDecrementFromSales: true,
+    }
+  );
+}
+
+const DEFAULT_INVENTORY_WIDGETS: InventoryWidget[] = [
+  { id: "default-low-stock", type: "low_stock_alerts" },
+  { id: "default-days-left", type: "days_of_stock_leaderboard" },
+  { id: "default-reorder-queue", type: "reorder_queue" },
+  { id: "default-recent-adjustments", type: "recent_adjustments" },
+];
+
+/** Inventory dashboard widgets, defaulting to a sensible starter set. */
+export function inventoryDashboardConfig(config: TenantConfig): InventoryDashboardConfig {
+  return config.inventoryDashboard ?? { widgets: DEFAULT_INVENTORY_WIDGETS };
 }
 
 const DEFAULT_PRICING_WIDGETS: PricingWidget[] = [
@@ -637,6 +774,15 @@ export interface MenuItem {
   /** Data URI (small shop catalogs only — no external object storage). */
   imageUrl: string | null;
   createdAt: Date;
+  /** Inventory: opt this item into stock tracking. Default false — untracked items are unaffected. */
+  trackStock: boolean;
+  currentQty: number;
+  unit: string;
+  /** null = derive from inventoryConfig().defaultSafetyStockDays * sales velocity. */
+  reorderPoint: number | null;
+  /** null = fall back to inventoryConfig().defaultLeadTimeDays. */
+  leadTimeDays: number | null;
+  lastRestockedAt: Date | null;
 }
 
 // ---------- GST billing ----------

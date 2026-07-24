@@ -4,7 +4,7 @@
 // for the Pro-plan alternative that splits these into separate, more
 // frequent schedules.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { computeFeaturesJob, evaluateTriggersJob, runDuePricingPipelines } from "@hpas/jobs";
+import { computeFeaturesJob, evaluateTriggersJob, predictInventoryJob, runDuePricingPipelines } from "@hpas/jobs";
 import { isAuthorizedCronRequest, rejectUnauthorized } from "./_auth.js";
 
 export default async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -14,6 +14,7 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
     await computeFeaturesJob();
     await evaluateTriggersJob();
     await runDuePricingPipelines();
+    await predictInventoryJob();
     res.statusCode = 200;
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify({ ok: true }));

@@ -29,6 +29,7 @@ import {
 import {
   getOptedOutPhones,
   getProfileByPhone,
+  getTenantChannelSecrets,
   insertTransactionalMessage,
   loyaltyBalance,
 } from "@hpas/db";
@@ -45,11 +46,12 @@ export async function sendTransactionalWhatsApp(
   const blocked = optedOut.has(profile.phone);
 
   let liveSendFailed = false;
-  if (!blocked && process.env.WHATSAPP_MODE === "live") {
-    const res = await fetch(`${GRAPH_API_BASE}/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+  const secrets = await getTenantChannelSecrets(tenant.id);
+  if (!blocked && secrets.whatsappMode === "live") {
+    const res = await fetch(`${GRAPH_API_BASE}/${secrets.whatsappPhoneNumberId}/messages`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${process.env.WHATSAPP_ACCESS_TOKEN}`,
+        Authorization: `Bearer ${secrets.whatsappAccessToken}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({

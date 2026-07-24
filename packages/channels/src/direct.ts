@@ -7,7 +7,7 @@
 // required. In stub mode we simply record the send.
 
 import type { DirectMessage, Profile, Tenant } from "@hpas/types";
-import { getOptedOutPhones, insertDirectMessage } from "@hpas/db";
+import { getOptedOutPhones, getTenantChannelSecrets, insertDirectMessage } from "@hpas/db";
 
 export async function sendDirectMessage(
   tenant: Tenant,
@@ -18,7 +18,8 @@ export async function sendDirectMessage(
   const optedOut = await getOptedOutPhones(tenant.id);
   const blocked = optedOut.has(profile.phone);
 
-  if (!blocked && process.env.WHATSAPP_MODE === "live") {
+  const secrets = await getTenantChannelSecrets(tenant.id);
+  if (!blocked && secrets.whatsappMode === "live") {
     // TODO(whatsapp-live): POST free-form text via /{phone_number_id}/messages
     // when inside the service window, else send an approved utility template.
   }

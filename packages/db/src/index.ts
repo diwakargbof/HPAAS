@@ -5,4 +5,6 @@ export * from "./repos-engage.js";
 export * from "./repos-billing.js";
 export * from "./repos-pricing.js";
 export * from "./repos-notifications.js";
+export * from "./repos-inventory.js";
+export * from "./repos-tenant-secrets.js";
 export { migrate } from "./migrate.js";

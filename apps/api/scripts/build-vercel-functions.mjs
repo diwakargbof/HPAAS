@@ -11,7 +11,12 @@
 // symlinks and resolve fine as-is.
 import { build } from "esbuild";
 
-const external = ["express", "cors", "pg", "dotenv", "multer", "qrcode"];
+// xlsx is left external too — a large CJS package with dynamic/conditional
+// requires (codepage tables etc.) that esbuild's static ESM bundling
+// mishandles, breaking the whole function at import time. Like the other
+// real npm deps below, it isn't a workspace symlink, so leaving it
+// external resolves fine from node_modules at runtime.
+const external = ["express", "express-async-errors", "cors", "pg", "dotenv", "multer", "qrcode", "xlsx"];
 
 const entries = [
   { in: "api-src/index.ts", out: "api/index.js" },

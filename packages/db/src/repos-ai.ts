@@ -27,6 +27,12 @@ const mapMenuItem = (r: any): MenuItem => ({
   businessUnitIds: r.business_unit_ids ?? [],
   imageUrl: r.image_url ?? null,
   createdAt: r.created_at,
+  trackStock: r.track_stock ?? false,
+  currentQty: r.current_qty !== undefined && r.current_qty !== null ? Number(r.current_qty) : 0,
+  unit: r.unit ?? "unit",
+  reorderPoint: r.reorder_point === null || r.reorder_point === undefined ? null : Number(r.reorder_point),
+  leadTimeDays: r.lead_time_days === null || r.lead_time_days === undefined ? null : Number(r.lead_time_days),
+  lastRestockedAt: r.last_restocked_at ?? null,
 });
 
 export async function listMenuItems(

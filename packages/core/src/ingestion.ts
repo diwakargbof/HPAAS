@@ -11,9 +11,11 @@ import type {
   ProfileTraits,
   Tenant,
 } from "@hpas/types";
-import { addWhatsappOptIn, insertEvent, upsertProfile } from "@hpas/db";
+import { addWhatsappOptIn, insertEvent, listMenuItemsWithStock, upsertProfile } from "@hpas/db";
+import { inventoryConfig } from "@hpas/types";
 import { normalizePhone } from "./phone.js";
 import { awardPurchasePoints } from "./loyalty.js";
+import { decrementStockForSale } from "./inventory.js";
 
 dayjs.extend(customParseFormat);
 
@@ -114,6 +116,15 @@ export async function ingestNormalizedEvents(
   tenant: Tenant,
   events: NormalizedEvent[]
 ): Promise<{ processed: number }> {
+  // Built once per batch, not per event, and skipped entirely for tenants
+  // with nothing tracked — Inventory costs nothing for tenants not using it.
+  const autoDecrement = inventoryConfig(tenant.config).autoDecrementFromSales;
+  const trackedItemsByName = new Map<string, { menuItemId: string }>();
+  if (autoDecrement && events.some((e) => e.eventType === "purchase")) {
+    const tracked = await listMenuItemsWithStock(tenant.id, { trackedOnly: true });
+    for (const item of tracked) trackedItemsByName.set(item.name.toLowerCase(), { menuItemId: item.id });
+  }
+
   let processed = 0;
   for (const e of events) {
     const profile = await upsertProfile(tenant.id, e.phone, e.traits ?? {});
@@ -123,6 +134,9 @@ export async function ingestNormalizedEvents(
       // Loyalty earn lives in ingestion so points can never drift from the
       // events table, whichever path (CSV or streaming) the purchase took.
       await awardPurchasePoints(tenant, profile.id, e.amount);
+      // Same reasoning for stock: decrement inline so current_qty never
+      // drifts from the events table either.
+      await decrementStockForSale(tenant, e.items, trackedItemsByName);
     }
     processed++;
   }

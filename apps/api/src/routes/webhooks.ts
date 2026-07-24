@@ -5,16 +5,21 @@
 
 import { Router } from "express";
 import { handleWhatsAppInboundWebhook, handleWhatsAppStatusWebhook } from "@hpas/channels";
-import { getTenantBySlug } from "@hpas/db";
+import { getTenantBySlug, getTenantChannelSecrets } from "@hpas/db";
 
 export const webhooksRouter: import("express").Router = Router();
 
-/** Meta's verification handshake (GET with hub.challenge echo). */
-webhooksRouter.get("/whatsapp/:tenantSlug", (req, res) => {
-  const verifyToken = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN ?? "dev-verify-token";
+/** Meta's verification handshake (GET with hub.challenge echo). Verify token is per-tenant (falls back to the platform env var). */
+webhooksRouter.get("/whatsapp/:tenantSlug", async (req, res) => {
+  const tenant = await getTenantBySlug(req.params.tenantSlug);
+  if (!tenant) {
+    res.sendStatus(404);
+    return;
+  }
+  const secrets = await getTenantChannelSecrets(tenant.id);
   if (
     req.query["hub.mode"] === "subscribe" &&
-    req.query["hub.verify_token"] === verifyToken
+    req.query["hub.verify_token"] === secrets.whatsappWebhookVerifyToken
   ) {
     res.send(req.query["hub.challenge"]);
     return;

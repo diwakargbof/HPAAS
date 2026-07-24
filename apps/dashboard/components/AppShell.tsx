@@ -1,17 +1,18 @@
 "use client";
 
 // The tenant-aware shell: theming via CSS variables from config.branding.
-// A top bar switches between the two areas — Personalization and Pricing —
-// and the sidebar shows only that area's full menu (no more collapsible
-// groups). Settings/Billing are tenant-wide, not specific to either area, so
-// they stay in an always-visible "Account" footer below the area menu.
+// A top bar switches between the three areas — Personalization, Pricing,
+// and Inventory — and the sidebar shows only that area's full menu (no more
+// collapsible groups). Settings/Billing are tenant-wide, not specific to any
+// area, so they stay in an always-visible "Account" footer below the area menu.
 
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 import { areasConfig, type ModuleKey } from "@hpas/types";
 import { clearSession, getSession, type Session } from "../lib/api";
+import AppSettingsMenu, { useAppliedPrefs } from "./AppSettingsMenu";
 
-type Area = "personalization" | "pricing";
+type Area = "personalization" | "pricing" | "inventory";
 
 interface NavLink {
   key: string;
@@ -41,7 +42,13 @@ const PRICING_META: Partial<Record<ModuleKey, { label: string; path: string }>> 
   menu: { label: "Master Data", path: "/menu" },
 };
 
-// Tenant-wide, not specific to either area.
+// Same reasoning as Pricing above: Inventory is locked (🔒), not hidden,
+// when modules.inventory isn't enabled — Master Data still respects its own flag.
+const INVENTORY_META: Partial<Record<ModuleKey, { label: string; path: string }>> = {
+  menu: { label: "Master Data", path: "/menu" },
+};
+
+// Tenant-wide, not specific to any area.
 const ACCOUNT_META: Partial<Record<ModuleKey, { label: string; path: string }>> = {
   settings: { label: "Settings", path: "/settings" },
   billing: { label: "Billing", path: "/billing" },
@@ -55,6 +62,8 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const [session, setSessionState] = useState<Session | null>(null);
   const [area, setArea] = useState<Area>("personalization");
 
+  useAppliedPrefs();
+
   useEffect(() => {
     const s = getSession();
     if (!s) {
@@ -64,10 +73,10 @@ export default function AppShell({ children }: { children: ReactNode }) {
     setSessionState(s);
     const stored = window.localStorage.getItem(AREA_STORAGE_KEY);
     const areas = areasConfig(s.tenant.config);
-    if ((stored === "personalization" || stored === "pricing") && areas[stored]) {
+    if ((stored === "personalization" || stored === "pricing" || stored === "inventory") && areas[stored]) {
       setArea(stored);
-    } else if (!areas.personalization && areas.pricing) {
-      setArea("pricing");
+    } else if (!areas.personalization) {
+      setArea(areas.pricing ? "pricing" : areas.inventory ? "inventory" : "personalization");
     }
   }, [router]);
 
@@ -76,6 +85,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
   const { config } = session.tenant;
   const colors = config.branding.colors;
   const pricingEnabled = Boolean(config.modules.pricing?.enabled);
+  const inventoryEnabled = Boolean(config.modules.inventory?.enabled);
   const areas = areasConfig(config);
 
   function selectArea(next: Area) {
@@ -116,12 +126,26 @@ export default function AppShell({ children }: { children: ReactNode }) {
     ...pricingModuleLinks,
   ];
 
-  const areaLinks = area === "personalization" ? personalizationLinks : pricingLinks;
+  const inventoryModuleLinks: NavLink[] = (
+    Object.entries(INVENTORY_META) as Array<[ModuleKey, { label: string; path: string }]>
+  )
+    .filter(([key]) => config.modules[key]?.enabled)
+    .map(([key, meta]) => ({ key, label: meta.label, path: meta.path }));
+
+  const inventoryLinks: NavLink[] = [
+    { key: "inventory-dashboard", label: "Dashboard", path: "/inventory/dashboard" },
+    { key: "inventory-items", label: "Items", path: "/inventory" },
+    { key: "inventory-reorder", label: "Reorder Suggestions", path: "/inventory/reorder" },
+    { key: "inventory-settings", label: "Settings", path: "/inventory/settings" },
+    ...inventoryModuleLinks,
+  ];
+
+  const areaLinks = area === "personalization" ? personalizationLinks : area === "pricing" ? pricingLinks : inventoryLinks;
 
   // Longest-prefix match, not a plain startsWith: "/pricing/settings" must
   // only light up "Item Settings" (path "/pricing/settings"), not also
   // "Recommendations" (path "/pricing", a prefix of it).
-  const allLinks = [...personalizationLinks, ...pricingLinks, ...accountLinks];
+  const allLinks = [...personalizationLinks, ...pricingLinks, ...inventoryLinks, ...accountLinks];
   const activeLink = allLinks
     .filter((l) => pathname === l.path || pathname.startsWith(`${l.path}/`))
     .sort((a, b) => b.path.length - a.path.length)[0];
@@ -172,11 +196,20 @@ export default function AppShell({ children }: { children: ReactNode }) {
               Pricing{!pricingEnabled ? " 🔒" : ""}
             </button>
           )}
+          {areas.inventory && (
+            <button className={`area-tab${area === "inventory" ? " active" : ""}`} onClick={() => selectArea("inventory")}>
+              Inventory{!inventoryEnabled ? " 🔒" : ""}
+            </button>
+          )}
+        </div>
+        <div className="topbar-right">
+          <AppSettingsMenu />
         </div>
       </header>
       <div className="shell-body">
         <aside className="sidebar">
-          {(area === "personalization" ? areas.personalization : areas.pricing) && areaLinks.map(navLink)}
+          {(area === "personalization" ? areas.personalization : area === "pricing" ? areas.pricing : areas.inventory) &&
+            areaLinks.map(navLink)}
           {accountLinks.length > 0 && (
             <>
               <div className="nav-group-header" style={{ cursor: "default", marginTop: 12 }}>

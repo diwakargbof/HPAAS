@@ -59,6 +59,14 @@ graph TD
         MENU --> GST[gst-billing - tax invoice]
         GST --> WA
         GST --> EMAIL
+        MENU --> INV[inventory - reorder suggestions]
+        INGEST -->|auto-decrement, if tracked| INV
+        INV -->|low-stock, first crossing only| WA
+        AIASSIST[ai-assist-toggle - per-tenant opt-in] -.->|gates| COPY
+        AIASSIST -.->|gates| AIAUTHOR
+        AIASSIST -.->|gates| AIDISCOVER
+        AIASSIST -.->|gates| CARD
+        AIASSIST -.->|gates| INV
     end
 ```
 
@@ -220,25 +228,53 @@ graph TD
 - **`channel-interface`** — One `send(channel, tenant, profile, ...)` signature over all adapters.
   *Files:* `packages/channels/src/index.ts`. *Used by:* `campaign-sender`, `email-fallback`.
 
+- **`channel-credentials`** — Per-tenant WhatsApp + email sending credentials. Every shop has
+  its own WhatsApp Business number and, optionally, its own email sender — these were
+  single platform-wide env vars originally, now each is a per-tenant override stored in the
+  same `tenant_secrets` table as the AI-assist key (see `ai-assist-toggle`; migration
+  `015_tenant_channel_credentials.sql` adds `whatsapp_mode`, `whatsapp_phone_number_id`,
+  `whatsapp_access_token`, `whatsapp_webhook_verify_token`, `email_mode`, `resend_api_key`
+  columns). `getTenantChannelSecrets(tenantId)` is the single resolution point every send
+  path calls: a tenant's own saved column wins; a `NULL` column falls back to the platform
+  env var of the same name (`WHATSAPP_MODE`/`WHATSAPP_PHONE_NUMBER_ID`/
+  `WHATSAPP_ACCESS_TOKEN`/`WHATSAPP_WEBHOOK_VERIFY_TOKEN`/`EMAIL_MODE`/`RESEND_API_KEY`), so
+  an environment with nothing tenant-specific configured behaves exactly as it did before
+  this table existed. `GET/PUT /v1/app/settings/channels` (tenant-wide, `/settings` →
+  **Channels** card) never returns a raw secret — only masked booleans
+  (`hasWhatsappAccessToken`, `hasResendApiKey`, etc) via `getTenantChannelInfo`.
+  *Files:* `packages/db/src/repos-tenant-secrets.ts`, migration
+  `015_tenant_channel_credentials.sql`, `apps/api/src/routes/app.ts`
+  (`GET/PUT /settings/channels`), `apps/dashboard/components/ChannelsCard.tsx`.
+  *Depends on:* `db-layer`. *Used by:* `whatsapp-adapter`, `whatsapp-webhooks`,
+  `email-adapter`, `order-receipts`, `direct-messages`.
+
 - **`whatsapp-adapter`** — Meta Cloud API adapter. Models real constraints: pre-approved
-  templates only (no approved template = refused send), opt-in store. `WHATSAPP_MODE=stub`
-  (default) records instead of calling; `TODO(whatsapp-live)` marks every live-credentials spot.
+  templates only (no approved template = refused send), opt-in store. Mode/credentials are
+  resolved per-tenant via `channel-credentials` (stub is the default when neither the tenant
+  nor the platform env var sets `live`); `TODO(whatsapp-live)` marks every live-send spot.
   POS import counts as opt-in for the pilot.
   *Files:* `packages/channels/src/whatsapp.ts`.
-  *Depends on:* `db-layer`. *Used by:* `channel-interface`, `campaign-sender`, `direct-messages`.
+  *Depends on:* `db-layer`, `channel-credentials`. *Used by:* `channel-interface`,
+  `campaign-sender`, `direct-messages`.
 
 - **`whatsapp-webhooks`** — Per-tenant-slug webhook endpoints (Meta verify handshake,
   delivery receipts, inbound replies, STOP opt-outs, redemption codes typed back, coupon
-  codes redeemed, QR-order tokens claimed). Every inbound message carries the customer's
-  WhatsApp profile name in `contacts[].profile.name` alongside `messages[]` — the inbound
-  handler matches it by `wa_id` and merges it into the profile's traits on upsert, so a QR
-  claim or any reply captures a name, not just a phone number.
+  codes redeemed, QR-order tokens claimed). The verify handshake checks the *tenant's own*
+  webhook verify token (`channel-credentials`, falling back to the platform
+  `WHATSAPP_WEBHOOK_VERIFY_TOKEN`/`dev-verify-token`), not a single global secret. Every
+  inbound message carries the customer's WhatsApp profile name in
+  `contacts[].profile.name` alongside `messages[]` — the inbound handler matches it by
+  `wa_id` and merges it into the profile's traits on upsert, so a QR claim or any reply
+  captures a name, not just a phone number.
   *Files:* `apps/api/src/routes/webhooks.ts`, handlers in `packages/channels/src/whatsapp.ts`.
-  *Depends on:* `phone-normalization`, `coupon-engine`, `db-layer`. *Used by:* `attribution`,
-  `email-fallback` (delivery status), `qr-order-capture` (claim entry point).
+  *Depends on:* `phone-normalization`, `coupon-engine`, `channel-credentials`, `db-layer`.
+  *Used by:* `attribution`, `email-fallback` (delivery status), `qr-order-capture` (claim
+  entry point).
 
-- **`email-adapter`** — Resend-shaped fallback channel; `EMAIL_MODE=stub` default.
-  *Files:* `packages/channels/src/email.ts`. *Used by:* `email-fallback`.
+- **`email-adapter`** — Resend-shaped fallback channel; mode/key resolved per-tenant via
+  `channel-credentials` (stub is the default).
+  *Files:* `packages/channels/src/email.ts`. *Depends on:* `channel-credentials`.
+  *Used by:* `email-fallback`.
 
 - **`email-fallback`** — WhatsApp undelivered/unread 48h after send + email on file → same
   rendered text by email. Switches the *same* message row's channel so attribution counts
@@ -263,7 +299,8 @@ graph TD
 - **`direct-messages`** — 1:1 note from the counter card on Billing (owner → customer). Recorded in
   `direct_messages`, never in campaign messages — attribution and hold-out stay clean.
   *Files:* `packages/channels/src/direct.ts`, route in `apps/api/src/routes/counter.ts`.
-  *Depends on:* `whatsapp-adapter`, `phone-normalization`. *Used by:* `counter-card` page/API.
+  *Depends on:* `whatsapp-adapter`, `channel-credentials`, `phone-normalization`.
+  *Used by:* `counter-card` page/API.
 
 - **`order-receipts`** — Transactional WhatsApp sends triggered by the customer's own
   purchase (so no campaign approval gate; opt-outs still honored): the itemized bill +
@@ -272,46 +309,79 @@ graph TD
   always inside Meta's 24h service window since the customer just messaged). Recorded in
   `transactional_messages` — never in campaign messages or `direct_messages`, keeping
   attribution, hold-outs, and the owner's 1:1 history clean. Config
-  `receipts.{enabled,showItems,footerNote}`. In `WHATSAPP_MODE=live`, `sendTransactionalWhatsApp`
-  sends real free-form text via the Graph API (`POST /{phone_number_id}/messages`, no template
-  needed since it's always inside the 24h service window) — the recorded `status` reflects
-  whether that live send actually succeeded, not just the opt-out check. A receipt fired from a
-  bulk CSV import may fall outside that window; for production at real scale that path should
-  move to an approved Meta "utility" template — free-form is fine for a live demo.
+  `receipts.{enabled,showItems,footerNote}`. When the tenant's resolved WhatsApp mode
+  (`channel-credentials`) is `live`, `sendTransactionalWhatsApp` sends real free-form text
+  via the Graph API (`POST /{phone_number_id}/messages`, no template needed since it's
+  always inside the 24h service window) — the recorded `status` reflects whether that live
+  send actually succeeded, not just the opt-out check. A receipt fired from a bulk CSV
+  import may fall outside that window; for production at real scale that path should move
+  to an approved Meta "utility" template — free-form is fine for a live demo.
   *Files:* `packages/channels/src/receipt.ts`, wiring in `apps/api/src/routes/ingest.ts`.
-  *Depends on:* `ingestion`, `loyalty-points`, `coupon-engine`, `db-layer`.
-  *Used by:* `qr-order-capture` (welcome).
+  *Depends on:* `ingestion`, `loyalty-points`, `coupon-engine`, `channel-credentials`,
+  `db-layer`. *Used by:* `qr-order-capture` (welcome).
 
 ## 6. AI surface (`packages/ai` — the ONLY LLM call sites; all authoring-time or cached)
 
-- **`ai-provider`** — The single seam to any LLM: `CopyProvider` interface with four narrow
-  functions. Anthropic implementation + deterministic mock (no `ANTHROPIC_API_KEY` = fully
-  offline demo). Swapping providers touches zero callers.
+- **`ai-provider`** — The single seam to any LLM: `CopyProvider` interface with six narrow
+  functions (campaign copy, segment authoring, segment discovery, counter pitch, pricing
+  rationale, inventory rationale). Anthropic implementation + deterministic mock. Provider
+  selection is a lookup table keyed by provider name (`PROVIDER_FACTORIES` in
+  `packages/ai/src/index.ts`) — only `"anthropic"` is implemented today, but adding another
+  model is a new factory entry, never a call-site or schema change. Swapping providers
+  touches zero callers.
   *Files:* `packages/ai/src/provider.ts`, `anthropic-provider.ts`, `mock-provider.ts`,
   `index.ts`.
-  *Used by:* the four nodes below.
+  *Used by:* the five nodes below, gated per-tenant by `ai-assist-toggle`.
+
+- **`ai-assist-toggle`** — Per-tenant, off-by-default opt-in that decides whether the five
+  call sites below use a real AI model or the deterministic `MockCopyProvider` — off is
+  bit-for-bit the same behavior every surface already has with no API key configured. Two
+  independent booleans (`aiAssistConfig().personalization` / `.pricing`), covering
+  Personalization's four call sites and Pricing/Inventory's rationale respectively. The API
+  key is **never** stored in `tenant.config` (that JSONB is returned wholesale to the
+  dashboard client on every session load, and is what the git-committed
+  `tenants/<slug>/config.json` seed becomes) — it lives in its own `tenant_secrets` row
+  (`provider`, `api_key`, `model` columns, generic/free-text so a tenant can bring any AI
+  model's key, not only Anthropic's), fetched server-side only and never echoed back by any
+  route (`GET /settings/ai-assist` only ever returns a masked `hasApiKey` boolean). Every
+  call site resolves `aiAssistConfig(tenant.config)` + the tenant's own key/provider/model
+  into one `ProviderSelection` and calls `defaultProvider(selection)` — the on/off + key
+  resolution branch lives in that one function, never duplicated per call site. Intended as
+  the seam for a future paid AI tier once usage/revenue justify metering it — no
+  plan/entitlement system exists yet, so this is a plain feature flag today, not a billing
+  integration.
+  *Files:* `packages/types/src/index.ts` (`AiAssistConfig`, `aiAssistConfig()`),
+  `packages/db/migrations/014_inventory.sql` (`tenant_secrets` table),
+  `packages/db/src/repos-tenant-secrets.ts` (`getTenantAiProviderInfo`, `getTenantApiKey`,
+  `setTenantApiKey` — shares the table and file with `channel-credentials`'s WhatsApp/email
+  functions), `packages/ai/src/index.ts` (`ProviderSelection`, `defaultProvider`),
+  `apps/api/src/routes/app.ts` (`GET/PUT /settings/ai-assist`),
+  `apps/dashboard/components/AiAssistCard.tsx` (the slide-toggle UI on Settings).
+  *Depends on:* `ai-provider`, `db-layer`.
+  *Used by:* `ai-campaign-copy`, `ai-segment-authoring`, `ai-segment-discovery`,
+  `ai-counter-pitch`, `ai-pricing`, `inventory`.
 
 - **`ai-campaign-copy`** — `generateCampaignCopy`: ONE template per campaign, cached on the
   campaign row; send time is plain interpolation. Can name real recently-added menu items.
   *Files:* `packages/ai/src/index.ts`, wired in `packages/jobs/src/copy-generator.ts`.
-  *Depends on:* `ai-provider`, `menu-catalog`. *Used by:* `trigger-engine`.
+  *Depends on:* `ai-provider`, `ai-assist-toggle`, `menu-catalog`. *Used by:* `trigger-engine`.
 
 - **`ai-segment-authoring`** — `authorSegmentFromPrompt`: owner's plain words → segment rule
   **as data**; the whitelisted compiler + live audience preview validate before save
   (`POST /v1/app/segments/preview` → `POST /v1/app/segments`).
   *Files:* `packages/ai/src/index.ts`, `apps/api/src/routes/segments.ts`.
-  *Depends on:* `ai-provider`, `segment-rule-engine`. *Used by:* `dashboard-segments`.
+  *Depends on:* `ai-provider`, `ai-assist-toggle`, `segment-rule-engine`. *Used by:* `dashboard-segments`.
 
 - **`ai-segment-discovery`** — `discoverSegments`: aggregate PII-free stats → proposed named,
   sized segments; saved only on the owner's tap (`POST /v1/app/segments/discover`).
   *Files:* `packages/ai/src/index.ts`, `apps/api/src/routes/segments.ts`.
-  *Depends on:* `ai-provider`, `segment-rule-engine`, `feature-computation`.
+  *Depends on:* `ai-provider`, `ai-assist-toggle`, `segment-rule-engine`, `feature-computation`.
   *Used by:* `dashboard-segments`.
 
 - **`ai-counter-pitch`** — `generateCounterPitch`: one cashier line per customer, cached 24h
   per (tenant, profile) — cost scales with counter footfall, not customer count.
   *Files:* `packages/ai/src/index.ts`, cache in `packages/jobs/src/counter-card.ts`.
-  *Depends on:* `ai-provider`, `counter-recommendations`. *Used by:* `counter-card`.
+  *Depends on:* `ai-provider`, `ai-assist-toggle`, `counter-recommendations`. *Used by:* `counter-card`.
 
 ## 7. AI-native dashboard modules (per-tenant toggleable)
 
@@ -383,13 +453,19 @@ graph TD
   recommendations/billing, not just a tag. **Print labels**: `/menu/labels?ids=<comma-separated>`
   is a bare (no `AppShell`) printable price-tag sheet for selected items — no backend beyond
   `GET /menu`, just `@media print` CSS and the browser's print dialog.
+  **Stock columns** (migration `014_inventory.sql`, see `inventory`): `current_qty`, `unit`,
+  `reorder_point`, `lead_time_days`, `track_stock` (default `false`), `last_restocked_at` —
+  Inventory extends this same table rather than a separate catalog; an item is invisible to
+  the reorder engine until its own `track_stock` is turned on.
   *Files:* `packages/core/src/menu.ts`, `apps/api/src/routes/menu.ts`,
   `apps/dashboard/app/menu/{page,labels/page}.tsx`, repos in `packages/db/src/repos-ai.ts`,
-  migrations `003_ai_native.sql` (tags), `010_business_units.sql`, `011_menu_item_images.sql`.
+  migrations `003_ai_native.sql` (tags), `010_business_units.sql`, `011_menu_item_images.sql`,
+  `014_inventory.sql` (stock columns).
   *Depends on:* `db-layer`, `business-units` (tags + branch price). *Used by:*
   `counter-recommendations`, `ai-campaign-copy`, `tenant-onboarding`, `qr-order-capture`
   (dashboard item picker for QR orders), `gst-billing` (per-item tax rate/HSN, branch
-  price), `ai-pricing` (per-item tax rate/HSN, current/branch price).
+  price), `ai-pricing` (per-item tax rate/HSN, current/branch price), `inventory`
+  (stock fields + tracking flag).
 
 - **`gst-billing`** — Tenant-invoked GST tax invoice generation. The tenant fills in their own
   business/GST details once (`Settings → Billing`, linked from the `/settings` hub page,
@@ -561,12 +637,107 @@ graph TD
   `008_pricing_safety_net.sql`, `012_branch_pricing.sql`, `013_pricing_pipelines.sql`.
   *Depends on:* `menu-catalog` (items + prices + branch tags), `business-units`
   (branch-scoped signal + price overrides), `ingestion` (events.items sales history),
-  `db-layer`. *Used by:* `dashboard-app`.
+  `ai-assist-toggle` (gates the rationale call), `db-layer`. *Used by:* `dashboard-app`.
   *Enabled for:* `dadus` (demo tenant) only, as of this writing — every other tenant sees the
   demo bar (see above) as an upsell until you explicitly add
   `"pricing": { "enabled": true, "order": N }` to their config, same admin-gating mechanism —
   distinct from `areas.pricing` (see `dashboard-app`), which controls whether the Pricing tab
   *exists at all* for a tenant, demo or not.
+
+- **`inventory`** — Optional, admin-gated add-on (`modules.inventory.enabled`, same gating
+  shape as `ai-pricing`): stock tracking layered onto the existing `menu-catalog` (no
+  separate item catalog) plus a deterministic sales-velocity reorder engine. Stock fields
+  (`current_qty`, `unit`, `reorder_point`, `lead_time_days`, `track_stock`,
+  `last_restocked_at`) live directly on `menu_items` (migration `014_inventory.sql`); an item
+  only participates once its own `track_stock` is turned on (`/inventory` Items page).
+  Every stock change — a sale, a manual adjustment, or a restock — is recorded first in the
+  append-only `stock_ledger` table (mirrors `loyalty-points`' ledger pattern), with
+  `menu_items.current_qty` just the running total, kept in sync transactionally
+  (`recordStockAdjustment`, `packages/db/src/repos-inventory.ts`). **Auto-decrement**
+  (`InventoryConfig.autoDecrementFromSales`, default on): `ingestNormalizedEvents`
+  (`packages/core/src/ingestion.ts`) matches each purchased `EventItem` by name to a tracked
+  menu item (same by-name matching `ai-pricing`'s sales signal already uses, since `events`
+  stores item names in JSONB, not a `menu_item_id` FK) and calls
+  `decrementStockForSale` right next to loyalty's award-on-purchase — one tracked-items query
+  per ingestion batch, skipped entirely for tenants with nothing tracked, so Inventory costs
+  nothing for tenants not using it.
+  **Reorder engine** (`computeReorderSuggestion`, `packages/core/src/inventory.ts` — no LLM):
+  average daily sales = 90-day units sold ÷ 90 (reusing `ai-pricing`'s own
+  `tenantItemSalesByName`, not a forked query); days-of-stock-left = current qty ÷ that
+  average (`null` with no sales history yet); a reorder point (explicit per-item override, or
+  derived from `defaultSafetyStockDays × velocity`) decides urgency
+  (`high` if days-left ≤ lead time, `medium` if within lead time + safety-stock days, else
+  `low`); suggested order quantity covers `safetyStockDays + leadTimeDays` of the same
+  velocity. `refreshReorderSuggestions` (`packages/jobs/src/predict-inventory.ts`, mirrors
+  `pricing.ts`'s pattern exactly) computes this for every tracked item, then makes one
+  **batched, optional** AI call (`generateInventoryRationale`, the 6th `@hpas/ai` call site,
+  gated by `ai-assist-toggle`'s `pricing` surface) for a short plain-language reason per
+  item; any item the model skips falls back to a deterministic rationale built from its
+  urgency/days-left, so correctness never depends on the AI call. Results cache in
+  `reorder_suggestions` (one row per item, upserted, mirrors `price_recommendations`) with a
+  `manual_override_qty` column — set via `PUT /inventory/reorder-suggestions/:id/override` —
+  that wins everywhere a suggested quantity would otherwise show, until cleared.
+  **Manual "Recompute now"** (`POST /inventory/reorder-suggestions/recompute`) never runs
+  automatically from the dashboard; the **nightly sweep** (`predictInventoryJob`,
+  `packages/jobs/src/index.ts`'s `JOBS` registry for `pnpm worker predict-inventory`, and
+  called directly from `nightly.ts` alongside `runDuePricingPipelines` — not a new Vercel
+  Cron endpoint, same 2-cron-job-cap reasoning) recomputes for every tenant with
+  `modules.inventory.enabled`.
+  **Bulk upload, any format** (`GET /inventory/items/export.csv` / `POST
+  /inventory/items/import`): the import route's `parseInventoryFile` helper
+  (`apps/api/src/routes/inventory.ts`) detects the uploaded file's type by extension and
+  branches to the right parser — CSV/TXT via `packages/core/src/csv.ts`'s `parseCsv`, a
+  small inline TSV splitter, `JSON.parse` for a raw array of row objects, or the `xlsx`
+  npm package (SheetJS, an `apps/api`-only dependency — kept out of `packages/core` to
+  preserve its dependency-free-CSV-parsing stance) for `.xlsx`/`.xls` workbooks via
+  `XLSX.utils.sheet_to_json`. Every format normalizes to the same row-record shape before
+  reaching shared import logic, so downstream handling doesn't care which format arrived.
+  A row whose name doesn't match an existing item is not rejected — it **creates** a new
+  tracked item (`upsertMenuItem` + `updateMenuItemStockSettings({trackStock: true})`), so
+  this endpoint doubles as a one-shot "add my whole inventory" import, not only a recount
+  tool; each changed quantity becomes one `stock_ledger` "manual" entry either way.
+  **Item CRUD from Inventory itself**: `POST /inventory/items` creates a new menu item with
+  tracking on in one call (no detour through Master Data); `PATCH /inventory/items/:id` is a
+  full editor — catalog fields (name/category/price/tags, via the same `updateMenuItem` used
+  by Master Data) AND stock fields in one request, so every column in the Items table
+  (`apps/dashboard/app/inventory/page.tsx`) is inline-editable via a per-row Edit/Save mode.
+  `POST /inventory/items/:id/set-quantity` sets an absolute quantity (delta computed
+  server-side against the freshest `current_qty`, avoiding a stale-client race) — the
+  dashboard uses this for direct numeric entry, keeping the existing delta-based
+  `POST .../adjust` for the quick +/- buttons. **Order/stock tags**: reuses `menu_items.tags`
+  (the same column Master Data's descriptive tags use) with Inventory-specific presets
+  (Ordered, Will Order, Flagged, Backordered) shown only in the Items table — purely
+  free-text bookkeeping, no effect on the reorder computation. The Items table also color-
+  codes each row by that item's cached `reorder_suggestions.urgency` (red/amber/green),
+  giving an at-a-glance status view without leaving the page.
+  **Dashboard** (`/inventory/dashboard`) mirrors `personalization-dashboard`'s
+  configurable-widget-board pattern — 5 widget types (`low_stock_alerts`,
+  `days_of_stock_leaderboard`, `reorder_queue`, `recent_adjustments`, `top_movers`) rendered
+  client-side from `GET /inventory/reorder-suggestions` and `GET /inventory/ledger`; layout
+  persists via `GET/PUT /v1/app/settings/inventory-dashboard` (`InventoryDashboardConfig`,
+  same optional-config + default-accessor idiom).
+  **Demo bar** (`apps/dashboard/app/inventory/locked.tsx`): tenants without
+  `modules.inventory.enabled` see the same "Demo" banner + static illustrative table
+  convention as `ai-pricing`'s `locked.tsx`, on every Inventory sub-page.
+  **Deliberate scope limits**: no separate item catalog; no automatic purchase orders sent to
+  a supplier, ever — suggestions only; stock quantity is tenant-wide, not split per branch
+  even when `business-units` is active (a natural future extension, mirroring
+  `useBusinessUnitsInPricing`); sales velocity is a plain 90-day rolling average, not
+  seasonality-aware forecasting.
+  *Files:* `packages/core/src/inventory.ts`, `packages/db/src/repos-inventory.ts`,
+  `packages/db/migrations/014_inventory.sql`, `packages/jobs/src/predict-inventory.ts`,
+  `apps/api/src/routes/inventory.ts`, `apps/api/api-src/cron/nightly.ts`,
+  `apps/dashboard/app/inventory/{page,locked,dashboard/page,reorder/page,settings/page}.tsx`,
+  `packages/ai/src/{provider,anthropic-provider,mock-provider,index}.ts` (`writeInventoryRationale`,
+  `generateInventoryRationale`), `packages/core/src/ingestion.ts` (auto-decrement hook).
+  *Depends on:* `menu-catalog` (items + tags, extended with stock columns), `ingestion`
+  (auto-decrement + `ai-pricing`'s shared sales-signal query), `ai-assist-toggle` (optional
+  rationale), `db-layer`. *Used by:* `dashboard-app` (3rd top-bar area).
+  *Enabled for:* every tenant, as of this writing (`dadus` and `smoketest`) — turned on for
+  all existing tenants directly rather than left as an upsell, same admin-gating mechanism
+  as `ai-pricing` otherwise (a new tenant still needs `"inventory": { "enabled": true,
+  "order": N }` added to its config explicitly) — distinct from `areas.inventory` (see
+  `dashboard-app`), which controls whether the Inventory tab *exists at all* for a tenant.
 
 - **`personalization-dashboard`** — A tenant-configurable widget board at
   `/personalization/dashboard`, the first entry in the Personalization nav group. Reuses
@@ -702,21 +873,45 @@ graph TD
   *Files:* `apps/api/api/cron/nightly.ts`, `maintenance.ts`, `_auth.ts`.
   *Depends on:* `scheduled-jobs`, `auth`.
 
+- **`app-display-prefs`** — Personal, per-browser display settings, entirely separate from
+  tenant business config: color scheme (light/dark/system), font size, density
+  (comfortable/compact), number format (`1,00,000` Indian grouping vs `100,000`
+  international), reduce-motion, and a disabled English-only language picker
+  (placeholder for future locales). Stored in `localStorage["hpas_app_prefs"]` only —
+  nothing here ever reaches the API or `tenants/<slug>/config.json`, unlike
+  `config.branding.colors` (tenant-wide, admin-set, seen by every viewer) which this is
+  layered on top of via CSS custom properties. Applied as `data-theme`/`data-font-size`/
+  `data-density`/`data-reduce-motion` attributes on `<html>`: an inline pre-hydration
+  `<script>` in `app/layout.tsx` sets them from `localStorage` before first paint (avoids
+  a flash of the wrong theme), and `AppSettingsMenu`'s `useAppliedPrefs()` hook re-applies
+  them once React mounts (also subscribes to the OS `prefers-color-scheme` media query
+  when the mode is "system"). All of `app/globals.css`'s tokens (`--surface-*`, `--ink*`,
+  `--shadow-*`, spacing scale) branch off these attributes via `:root[data-theme="dark"]`
+  etc. — most components need zero changes to support dark mode/density since they only
+  ever reference the CSS variables, never hard-coded colors.
+  *Files:* `apps/dashboard/lib/prefs.ts`, `apps/dashboard/components/AppSettingsMenu.tsx`,
+  `apps/dashboard/app/layout.tsx`, `apps/dashboard/app/globals.css`.
+  *Depends on:* nothing (pure client-side). *Used by:* `dashboard-app` (gear icon in the
+  top bar, top-right, opposite the area tabs).
+
 - **`dashboard-app`** — Next.js shop-owner app (:3000), tenant-themed. **Top bar** (not
-  sidebar) switches between exactly two areas — Personalization / Pricing — persisted to
-  `localStorage["hpas_active_area"]`; the "Pricing" tab shows 🔒 when `modules.pricing`
-  isn't enabled (an upsell, not a hide — see `ai-pricing`'s demo bar). The **sidebar shows
-  only the active area's full menu**, no collapsible groups.
+  sidebar) switches between exactly three areas — Personalization / Pricing / Inventory —
+  persisted to `localStorage["hpas_active_area"]`; a gear icon on the top-right of the same
+  bar opens `app-display-prefs`'s settings panel. The "Pricing"/"Inventory" tabs show 🔒
+  when their respective `modules.*.enabled` flag isn't set (an upsell, not a hide — see
+  `ai-pricing`'s and `inventory`'s demo bars). The **sidebar shows only the active area's
+  full menu**, no collapsible groups.
   **Per-tenant area visibility** (`TenantConfig.areas`, `areasConfig()` default-accessor,
-  both `personalization`/`pricing` default `true`): a coarser, distinct control from
-  `modules.pricing.enabled` — that decides whether an already-*visible* Pricing tab is
-  locked or unlocked; `areas.pricing: false` means the tab **doesn't exist at all** for that
-  tenant (no lock, no demo bar), for a tenant Pricing genuinely isn't offered to.
-  `areas.personalization: false` hides the Personalization tab the same way, e.g. for a
-  Pricing-only tenant. Set per-tenant in `config.json` (zero-code, same mechanism as every
-  other flag) — not an env var, since env vars are process-wide across every tenant in one
-  deployment. `AppShell` corrects the active area on load if the stored/default one isn't
-  visible for this tenant (e.g. falls back to Pricing if Personalization is hidden).
+  `personalization`/`pricing`/`inventory` all default `true`): a coarser, distinct control
+  from `modules.pricing.enabled`/`modules.inventory.enabled` — those decide whether an
+  already-*visible* tab is locked or unlocked; `areas.pricing: false` / `areas.inventory:
+  false` mean the tab **doesn't exist at all** for that tenant (no lock, no demo bar), for a
+  tenant that area genuinely isn't offered to. `areas.personalization: false` hides the
+  Personalization tab the same way, e.g. for a Pricing/Inventory-only tenant. Set per-tenant
+  in `config.json` (zero-code, same mechanism as every other flag) — not an env var, since
+  env vars are process-wide across every tenant in one deployment. `AppShell` corrects the
+  active area on load if the stored/default one isn't visible for this tenant (falls back in
+  personalization → pricing → inventory order).
   - **Personalization**: `/personalization/dashboard` (← `personalization-dashboard`,
     always first, not gated by its own module), `/insights` (customer picture + impact ←
     `attribution`), `/customers` (full searchable/sortable directory, branch-filterable ←
@@ -743,15 +938,20 @@ graph TD
     `/pricing/settings` Item Settings (all always shown once the area is reachable), `/menu`
     relabeled "Master Data" (still gated by the `menu` module flag, same as any other
     module-gated item — see `menu-catalog`; same route as Personalization's copy above).
+  - **Inventory**: `/inventory/dashboard` (← `inventory`'s widget board, first entry),
+    `/inventory` Items, `/inventory/reorder` Reorder Suggestions, `/inventory/settings`
+    (all always shown once the area is reachable), `/menu` relabeled "Master Data" (same
+    module-gated, shared-route pattern as Pricing's copy above).
   - **Nav active-state**: longest-prefix match against `pathname`, not a plain
     `startsWith` — `/pricing/settings` must only light up "Item Settings", not also
     "Recommendations" (path `/pricing`, a prefix of it). Fixed after the flat-`startsWith`
     version lit up both simultaneously.
   - **Account** (tenant-wide, shown below the area menu regardless of which tab is
-    active — Settings/Billing don't belong to either area): `/settings` (WhatsApp status,
-    branding, API key, Version card, links to `/settings/billing`), `/billing` (Generate
-    Bill ← `gst-billing`).
-  *Files:* `apps/dashboard/app/*/page.tsx`, `components/AppShell.tsx`, `lib/api.ts`.
+    active — Settings/Billing don't belong to any one area): `/settings` (WhatsApp status,
+    branding, API key, Version card, AI Assist toggle ← `ai-assist-toggle`, links to
+    `/settings/billing`), `/billing` (Generate Bill ← `gst-billing`).
+  *Files:* `apps/dashboard/app/*/page.tsx`, `components/AppShell.tsx`,
+  `components/AiAssistCard.tsx`, `lib/api.ts`.
   *Depends on:* `api-app` (via `lib/api.ts`), `auth`.
 
 - **`smoke-test`** — End-to-end test on a scratch tenant (proves second-tenant onboarding

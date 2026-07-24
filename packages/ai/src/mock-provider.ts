@@ -9,6 +9,8 @@ import type {
   CopyRequest,
   CopyResult,
   DiscoverSegmentsRequest,
+  InventoryRationaleRequest,
+  InventoryRationaleResult,
   PitchRequest,
   PricingRationaleRequest,
   PricingRationaleResult,
@@ -148,6 +150,20 @@ export class MockCopyProvider implements CopyProvider {
           : it.demandTrend === "falling"
             ? `Sales have cooled off — a small cut can bring customers back.`
             : `Steady sales${occasionBit} — price left close to where it is.`;
+      return { menuItemId: it.menuItemId, rationale };
+    });
+  }
+
+  async writeInventoryRationale(req: InventoryRationaleRequest): Promise<InventoryRationaleResult[]> {
+    return req.items.map((it) => {
+      const rationale =
+        it.daysOfStockLeft === null
+          ? "Not enough sales history yet to estimate how long stock will last."
+          : it.urgency === "high"
+            ? `At current sales pace, stock runs out in about ${Math.round(it.daysOfStockLeft)} day(s) — reorder soon.`
+            : it.urgency === "medium"
+              ? `Stock is comfortable for now but worth planning a reorder soon.`
+              : `Stock is well ahead of current sales pace.`;
       return { menuItemId: it.menuItemId, rationale };
     });
   }

@@ -4,6 +4,7 @@
 // tenant's from-address domain in Resend.
 
 import type { Invoice, Profile, SendMeta, SendResult, Tenant } from "@hpas/types";
+import { getTenantChannelSecrets } from "@hpas/db";
 
 export async function sendViaEmail(
   tenant: Tenant,
@@ -17,14 +18,15 @@ export async function sendViaEmail(
     return { ok: false, error: "email channel disabled for tenant" };
   }
 
-  if (process.env.EMAIL_MODE !== "resend") {
+  const secrets = await getTenantChannelSecrets(tenant.id);
+  if (secrets.emailMode !== "resend") {
     return { ok: true, providerMessageId: `stub-email-${meta.messageId}` };
   }
 
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+      Authorization: `Bearer ${secrets.resendApiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
@@ -53,12 +55,13 @@ export async function sendInvoiceEmail(
   const email = typeof profile.traits.email === "string" ? profile.traits.email : null;
   if (!email || !tenant.config.channels.email.enabled) return { status: "failed" };
 
-  if (process.env.EMAIL_MODE !== "resend") return { status: "sent" };
+  const secrets = await getTenantChannelSecrets(tenant.id);
+  if (secrets.emailMode !== "resend") return { status: "sent" };
 
   const res = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+      Authorization: `Bearer ${secrets.resendApiKey}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
